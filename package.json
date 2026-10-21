@@ -1,0 +1,17 @@
+{
+  "name": "uptime-prasasti-websites",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Uptime Prasasti Websites - self-hosted uptime monitoring with HTTP, keyword, JSON, TCP, ping, DNS and push monitors, public status pages, incidents, maintenance windows and notifications.",
+  "type": "commonjs",
+  "main": "server/index.js",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "seed": "node server/seed.js",
+    "test": "node test/run.mjs"
+  }
+}
