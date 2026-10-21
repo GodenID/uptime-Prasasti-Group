@@ -1,4 +1,5 @@
-import { escapeHtml, fmtPercent, fmtPing, icon, statusMeta, typeLabel } from './ui.js';
+import { escapeHtml, fmtPercent, fmtPing, icon, statusMeta } from './ui.js';
+import { setLang, t, typeLabel, statusText, currentLocale } from './i18n.js';
 
 const slug = decodeURIComponent(
     location.pathname.replace(/^\/status\//, '').replace(/\/+$/, '')
@@ -19,15 +20,27 @@ const view = {
 };
 
 const OVERALL = {
-    up: { label: 'Semua sistem beroperasi', cls: 'up' },
-    down: { label: 'Gangguan layanan terdeteksi', cls: 'down' },
-    pending: { label: 'Menunggu pemeriksaan pertama', cls: 'pending' },
-    maintenance: { label: 'Pemeliharaan terjadwal', cls: 'maintenance' },
+    up: { key: 'overallAllUp', cls: 'up' },
+    down: { key: 'overallDown', cls: 'down' },
+    pending: { key: 'overallPending', cls: 'pending' },
+    maintenance: { key: 'overallMaintenance', cls: 'maintenance' },
 };
 
 function overallMeta(status) {
     const meta = statusMeta(status);
-    return OVERALL[meta.key] || { label: 'Status tidak diketahui', cls: 'pending' };
+    return OVERALL[meta.key] || { key: 'overallUnknown', cls: 'pending' };
+}
+
+/**
+ * Bahasa halaman mengikuti pengaturan status page: 'id', 'en', atau 'auto'.
+ */
+function resolveLang(page) {
+    const setting = page?.lang || 'id';
+    if (setting === 'auto') {
+        const browser = String(navigator.language || 'id-ID').toLowerCase();
+        return setLang(browser.startsWith('en') ? 'en' : 'id');
+    }
+    return setLang(setting);
 }
 
 async function load() {
@@ -41,7 +54,7 @@ async function load() {
             return false;
         }
         if (!response.ok) {
-            throw new Error('Gagal memuat status layanan');
+            throw new Error(t('cannotLoad'));
         }
         view.payload = await response.json();
         view.error = '';
@@ -60,13 +73,13 @@ async function load() {
 }
 
 function showMissing() {
-    document.title = 'Status page tidak ditemukan · Prasasti';
+    document.title = `${t('notFoundTitle')} · Prasasti`;
     root.innerHTML = `
         <div class="missing">
             <div class="missing-mark">${icon('alert', 20)}</div>
-            <h1>Halaman tidak ditemukan</h1>
-            <p>Status page ini belum diterbitkan atau sudah dihapus. Hubungi penyedia layanan untuk tautan yang benar.</p>
-            <a class="btn" href="/">Buka Prasasti</a>
+            <h1>${escapeHtml(t('notFoundTitle'))}</h1>
+            <p>${escapeHtml(t('notFoundText'))}</p>
+            <a class="btn" href="/">${escapeHtml(t('openPrasasti'))}</a>
         </div>
     `;
 }
@@ -75,13 +88,13 @@ function showError(message) {
     root.innerHTML = `
         <div class="missing">
             <div class="missing-mark">${icon('alert', 20)}</div>
-            <h1>Tidak dapat memuat status</h1>
+            <h1>${escapeHtml(t('cannotLoad'))}</h1>
             <p>${escapeHtml(message)}</p>
-            <button class="btn" data-retry>Coba lagi</button>
+            <button class="btn" data-retry>${escapeHtml(t('retry'))}</button>
         </div>
     `;
     root.querySelector('[data-retry]')?.addEventListener('click', () => {
-        root.innerHTML = '<div class="loading" role="status">Memuat status layanan…</div>';
+        root.innerHTML = `<div class="loading" role="status">${escapeHtml(t('loading'))}</div>`;
         load().then(() => connect());
     });
 }
@@ -92,7 +105,7 @@ function renderNotice() {
     if (view.connected || !view.payload) return;
     const note = document.createElement('div');
     note.className = 'net-note';
-    note.innerHTML = 'Koneksi langsung terputus. Halaman menyegarkan diri setiap menit.';
+    note.innerHTML = escapeHtml(t('netNote'));
     document.body.append(note);
 }
 
@@ -100,12 +113,15 @@ function render() {
     const data = view.payload;
     if (!data) return;
     const page = data.page;
+    resolveLang(page);
     document.title = `${page.title} · Status`;
     const description = page.description || `Kondisi terkini ${page.title}.`;
     const meta = document.querySelector('meta[name="description"]');
     if (meta) meta.setAttribute('content', description);
     const iconLink = document.querySelector('link[rel="icon"]');
     if (iconLink && page.icon) iconLink.setAttribute('href', page.icon);
+    const skip = document.querySelector('.skip');
+    if (skip) skip.textContent = t('skipToContent');
 
     const overall = overallMeta(data.overall.status);
     const down = data.overall.downMonitors;
@@ -113,12 +129,14 @@ function render() {
     const totalMonitors = data.overall.totalMonitors;
     const subline =
         overall.cls === 'down'
-            ? `${down} dari ${totalMonitors} layanan sedang terganggu.`
+            ? t('subDown', { down, total: totalMonitors })
             : overall.cls === 'maintenance'
-              ? 'Sebagian layanan sedang dalam pemeliharaan terjadwal.'
+              ? t('subMaintenance')
               : overall.cls === 'pending'
-                ? 'Pemeriksaan pertama belum selesai untuk sebagian layanan.'
-                : `${totalMonitors} layanan dipantau secara berkala.`;
+                ? t('subPending')
+                : t('subDefault', { total: totalMonitors });
+
+    const feedUrl = slug ? `/status/${slug}/feed.xml` : '/feed.xml';
 
     root.innerHTML = `
         <header class="hero">
@@ -128,35 +146,36 @@ function render() {
                     <span class="brand-text">Uptime Prasasti</span>
                 </div>
                 <span class="live ${view.connected ? 'on' : 'off'}" title="${
-                    view.connected ? 'Pembaruan langsung aktif' : 'Menyegarkan berkala'
+                    view.connected ? t('liveTitleOn') : t('liveTitleOff')
                 }">
-                    <span class="live-dot"></span>${view.connected ? 'Pembaruan langsung' : 'Diperbarui berkala'}
+                    <span class="live-dot"></span>${view.connected ? t('liveOn') : t('liveOff')}
                 </span>
             </div>
 
             <h1 class="hero-title">${escapeHtml(page.title)}</h1>
             ${description ? `<p class="hero-lede">${escapeHtml(description)}</p>` : ''}
+            ${page.announcement ? announcementHtml(page.announcement) : ''}
 
             <div class="overall ${overall.cls}">
                 <div class="overall-status">
                     <span class="overall-dot"></span>
                     <div>
-                        <b>${escapeHtml(overall.label)}</b>
+                        <b>${escapeHtml(t(overall.key))}</b>
                         <span>${escapeHtml(subline)}</span>
                     </div>
                 </div>
                 <div class="overall-figures">
                     <div class="figure">
                         <b>${data.overall.uptime24 === null ? '—' : fmtPercent(data.overall.uptime24)}</b>
-                        <span>uptime 24 jam</span>
+                        <span>${escapeHtml(t('uptime24'))}</span>
                     </div>
                     <div class="figure">
                         <b>${totalMonitors}</b>
-                        <span>layanan</span>
+                        <span>${escapeHtml(t('services'))}</span>
                     </div>
                     <div class="figure">
                         <b data-freshness>${timeAgo(view.lastReceived)}</b>
-                        <span>pembaruan</span>
+                        <span>${escapeHtml(t('updated'))}</span>
                     </div>
                 </div>
             </div>
@@ -172,18 +191,28 @@ function render() {
         <footer class="foot">
             <div class="foot-line">
                 ${page.footerText ? `<span>${escapeHtml(page.footerText)}</span>` : ''}
+                <a class="foot-feed" href="${escapeHtml(feedUrl)}">${escapeHtml(t('feedLink'))}</a>
                 <span class="spacer"></span>
-                <span>Diperbarui <span data-foot-time>${timeAgo(view.lastReceived)}</span></span>
+                <span>${escapeHtml(t('updatedFooter'))} <span data-foot-time>${timeAgo(view.lastReceived)}</span></span>
             </div>
             ${
                 page.showPoweredBy
-                    ? `<div class="foot-credit">${icon('stele', 13)} Didukung <a href="/" rel="noopener">Uptime Prasasti</a></div>`
+                    ? `<div class="foot-credit">${icon('stele', 13)} ${escapeHtml(
+                          t('poweredBy')
+                      )} <a href="/" rel="noopener">Uptime Prasasti</a></div>`
                     : ''
             }
         </footer>
     `;
 
     renderNotice();
+}
+
+function announcementHtml(text) {
+    return `<div class="announcement" role="note">
+        <b>${escapeHtml(t('announcementTitle'))}</b>
+        <p>${escapeHtml(text)}</p>
+    </div>`;
 }
 
 function maintenanceHtml(maintenance) {
@@ -197,14 +226,14 @@ function maintenanceHtml(maintenance) {
             <div class="notice-body">
                 <b>${escapeHtml(item.title)}</b>
                 ${item.description ? `<p>${escapeHtml(item.description)}</p>` : ''}
-                <span class="notice-meta">${isActive ? 'Sedang berlangsung · selesai' : 'Dijadwalkan · mulai'} ${fmtWhen(
+                <span class="notice-meta">${isActive ? t('noticeActive') : t('noticeScheduled')} ${fmtWhen(
                     isActive ? item.endAt : item.startAt
                 )}</span>
             </div>
         </div>`;
 
     return `<section class="block">
-        <h2 class="block-title">Pemeliharaan</h2>
+        <h2 class="block-title">${escapeHtml(t('maintenanceTitle'))}</h2>
         <div class="stack">
             ${active.map((item) => row(item, true)).join('')}
             ${upcoming.map((item) => row(item, false)).join('')}
@@ -215,7 +244,7 @@ function maintenanceHtml(maintenance) {
 function incidentsHtml(incidents) {
     if (!incidents?.length) return '';
     return `<section class="block">
-        <h2 class="block-title">Insiden aktif</h2>
+        <h2 class="block-title">${escapeHtml(t('incidentsTitle'))}</h2>
         <div class="stack">
             ${incidents.map(incidentHtml).join('')}
         </div>
@@ -227,11 +256,11 @@ function incidentHtml(incident) {
     return `<article class="incident ${style}">
         <div class="incident-head">
             <b>${escapeHtml(incident.title)}</b>
-            ${incident.pinned ? '<span class="pin">Disematkan</span>' : ''}
+            ${incident.pinned ? `<span class="pin">${escapeHtml(t('pinned'))}</span>` : ''}
         </div>
         ${incident.content ? `<p>${escapeHtml(incident.content)}</p>` : ''}
-        <div class="incident-meta">Mulai ${fmtWhen(incident.startedAt)}${
-            incident.resolvedAt ? ` · selesai ${fmtWhen(incident.resolvedAt)}` : ' · masih berlangsung'
+        <div class="incident-meta">${escapeHtml(t('started'))} ${fmtWhen(incident.startedAt)}${
+            incident.resolvedAt ? ` · ${escapeHtml(t('finished'))} ${fmtWhen(incident.resolvedAt)}` : ` · ${escapeHtml(t('ongoing'))}`
         }</div>
     </article>`;
 }
@@ -240,7 +269,7 @@ function groupsHtml(data) {
     const sections = [];
     if (data.monitors?.length) {
         sections.push(`<section class="block">
-            <h2 class="block-title">Layanan</h2>
+            <h2 class="block-title">${escapeHtml(t('servicesTitle'))}</h2>
             <div class="svc-list">${data.monitors.map(monitorHtml).join('')}</div>
         </section>`);
     }
@@ -251,15 +280,14 @@ function groupsHtml(data) {
         </section>`);
     }
     if (!sections.length) {
-        sections.push(`<section class="block"><div class="blank">
-            Belum ada layanan yang ditampilkan pada halaman ini.
-        </div></section>`);
+        sections.push(`<section class="block"><div class="blank">${escapeHtml(t('noServices'))}</div></section>`);
     }
     return sections.join('');
 }
 
 function monitorHtml(monitor) {
     const meta = statusMeta(monitor.status);
+    const stateLabel = statusText(monitor.status);
     const beats = (monitor.beats || []).slice(-30);
     const label = typeLabel(monitor.type);
     const uptime24 = monitor.uptime24 === null || monitor.uptime24 === undefined ? null : monitor.uptime24;
@@ -267,11 +295,11 @@ function monitorHtml(monitor) {
 
     return `<article class="svc">
         <div class="svc-ident">
-            <span class="dot ${meta.cls}" aria-label="${escapeHtml(meta.label)}"></span>
+            <span class="dot ${meta.cls}" aria-label="${escapeHtml(stateLabel)}"></span>
             <div class="svc-text">
                 <div class="svc-name">
                     <b>${escapeHtml(monitor.name)}</b>
-                    <span class="state ${meta.cls}">${escapeHtml(meta.label)}</span>
+                    <span class="state ${meta.cls}">${escapeHtml(stateLabel)}</span>
                 </div>
                 <div class="svc-sub">
                     <span>${escapeHtml(label)}</span>
@@ -291,7 +319,7 @@ function monitorHtml(monitor) {
                     ? beats
                           .map(
                               (beat) => `<span class="bar ${statusMeta(beat.status).cls}" title="${escapeHtml(
-                                  statusMeta(beat.status).label
+                                  statusText(beat.status)
                               )} · ${fmtWhen(beat.time)}${beat.msg ? ` · ${escapeHtml(beat.msg)}` : ''}"></span>`
                           )
                           .join('')
@@ -302,17 +330,17 @@ function monitorHtml(monitor) {
         <div class="svc-figures">
             <div class="figure sm">
                 <b>${monitor.avgPing24 === null || monitor.avgPing24 === undefined ? '—' : fmtPing(monitor.avgPing24)}</b>
-                <span>respons</span>
+                <span>${escapeHtml(t('response'))}</span>
             </div>
             <div class="figure sm">
                 <b>${uptime24 === null ? '—' : fmtPercent(uptime24)}</b>
-                <span>24 jam</span>
+                <span>${escapeHtml(t('last24'))}</span>
             </div>
             <div class="figure sm">
                 <b class="${uptime30 !== null && uptime30 < 99 ? 'low' : ''}">${
                     uptime30 === null ? '—' : fmtPercent(uptime30)
                 }</b>
-                <span>30 hari</span>
+                <span>${escapeHtml(t('last30'))}</span>
             </div>
         </div>
     </article>`;
@@ -322,7 +350,7 @@ function historyHtml(history) {
     if (!history?.length) return '';
     return `<section class="block">
         <details class="history">
-            <summary>Riwayat insiden (${history.length})</summary>
+            <summary>${escapeHtml(t('historyTitle'))} (${history.length})</summary>
             <div class="stack mt">
                 ${history.map(incidentHtml).join('')}
             </div>
@@ -332,7 +360,7 @@ function historyHtml(history) {
 
 function fmtWhen(timestamp) {
     if (!timestamp) return '—';
-    return new Date(Number(timestamp)).toLocaleString('id-ID', {
+    return new Date(Number(timestamp)).toLocaleString(currentLocale(), {
         day: '2-digit',
         month: 'short',
         hour: '2-digit',
@@ -343,13 +371,13 @@ function fmtWhen(timestamp) {
 function timeAgo(timestamp) {
     if (!timestamp) return '—';
     const seconds = Math.max(0, Math.floor((Date.now() - Number(timestamp)) / 1000));
-    if (seconds < 10) return 'baru saja';
-    if (seconds < 60) return `${seconds} dtk lalu`;
+    if (seconds < 10) return t('justNow');
+    if (seconds < 60) return t('secAgo', { n: seconds });
     const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes} mnt lalu`;
+    if (minutes < 60) return t('minAgo', { n: minutes });
     const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours} jam lalu`;
-    return `${Math.floor(hours / 24)} hari lalu`;
+    if (hours < 24) return t('hourAgo', { n: hours });
+    return t('dayAgo', { n: Math.floor(hours / 24) });
 }
 
 // ---------- realtime ----------

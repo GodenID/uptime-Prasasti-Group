@@ -1,7 +1,7 @@
 'use strict';
 
 const { all, get } = require('./db');
-const { STATUS, now, percent } = require('./util');
+const { STATUS, now, percent, escapeHtml } = require('./util');
 const { shapeStatusPage, shapeIncident, shapeMaintenance } = require('./models');
 const engine = require('./engine');
 
@@ -154,6 +154,95 @@ function getPageBySlug(slug) {
     return get('SELECT * FROM status_page WHERE slug = ?', [slug]);
 }
 
+/**
+ * Status page yang memakai domain kustom, dicocokkan dari header Host.
+ */
+function getPageByDomain(host) {
+    const value = String(host || '')
+        .trim()
+        .toLowerCase()
+        .replace(/:\d+$/, '');
+    if (!value) {
+        return null;
+    }
+    return get('SELECT * FROM status_page WHERE domain = ?', [value]);
+}
+
+const STATUS_LABEL = {
+    [STATUS.UP]: 'operasional',
+    [STATUS.DOWN]: 'gangguan',
+    [STATUS.PENDING]: 'menunggu',
+    [STATUS.MAINTENANCE]: 'pemeliharaan',
+};
+
+function rssDate(timestamp) {
+    return new Date(Number(timestamp) || Date.now()).toUTCString();
+}
+
+/**
+ * Umpan RSS 2.0 berisi insiden aktif, pemeliharaan, dan status tiap layanan.
+ */
+function statusPageFeed(pageRow, baseUrl) {
+    const page = shapeStatusPage(pageRow);
+    const payload = statusPagePayload(pageRow);
+    const origin = String(baseUrl || '').replace(/\/+$/, '');
+    const link = `${origin}/status/${page.slug}`;
+    const items = [];
+
+    for (const incident of payload.incidents) {
+        items.push({
+            title: incident.title,
+            description: incident.content || incident.title,
+            date: incident.startedAt,
+            link,
+        });
+    }
+    for (const maintenance of [...payload.maintenance.active, ...payload.maintenance.upcoming]) {
+        items.push({
+            title: `Pemeliharaan: ${maintenance.title}`,
+            description: maintenance.description || maintenance.title,
+            date: maintenance.startAt,
+            link,
+        });
+    }
+    const monitors = [...payload.monitors, ...payload.groups.flatMap((group) => group.monitors)];
+    for (const monitor of monitors) {
+        const uptime = monitor.uptime30 === null || monitor.uptime30 === undefined ? '—' : `${monitor.uptime30.toFixed(2)}%`;
+        items.push({
+            title: `${monitor.name}: ${STATUS_LABEL[monitor.status] || monitor.status}`,
+            description: `Uptime 30 hari ${uptime}. Status terakhir: ${monitor.status}.`,
+            date: payload.generatedAt,
+            link,
+        });
+    }
+
+    const rendered = items
+        .map(
+            (item) => `    <item>
+      <title>${escapeHtml(item.title)}</title>
+      <link>${escapeHtml(item.link)}</link>
+      <guid isPermaLink="false">${escapeHtml(`${page.slug}-${item.date}-${item.title}`)}</guid>
+      <description>${escapeHtml(item.description)}</description>
+      <pubDate>${rssDate(item.date)}</pubDate>
+    </item>`
+        )
+        .join('\n');
+
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>${escapeHtml(page.title)}</title>
+    <link>${escapeHtml(link)}</link>
+    <description>${escapeHtml(page.description || page.title)}</description>
+    <language>${page.lang === 'en' ? 'en' : 'id-ID'}</language>
+    <lastBuildDate>${rssDate(payload.generatedAt)}</lastBuildDate>
+    <generator>Uptime Prasasti Websites</generator>
+${rendered}
+  </channel>
+</rss>
+`;
+}
+
 function isPublished(row) {
     return Boolean(row && row.published);
 }
@@ -175,6 +264,8 @@ function pageMonitorsFlat(pageId) {
 module.exports = {
     statusPagePayload,
     getPageBySlug,
+    getPageByDomain,
+    statusPageFeed,
     isPublished,
     pageMonitors,
     pageMonitorsFlat,

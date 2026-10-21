@@ -7,6 +7,7 @@ import {
     openModal,
     closeModal,
     confirmDialog,
+    copyText,
     toast,
 } from '../ui.js';
 
@@ -39,6 +40,7 @@ export async function render(root, ctx) {
     const settings = state.settings || {};
     const tags = state.tags || [];
     const stats = state.stats || {};
+    const apiKeys = state.apiKeys || [];
 
     root.innerHTML = `
         <div class="page-head">
@@ -237,6 +239,50 @@ export async function render(root, ctx) {
                             )}
                             <div class="field full">
                                 <button class="btn ghost" type="submit">${icon('plus', 13)} Buat pengguna</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-head">
+                        <h3>Kunci API</h3>
+                        <span class="spacer"></span>
+                        <span class="page-note">Akses programatis tanpa sesi</span>
+                    </div>
+                    <div class="panel-body">
+                        <p class="muted" style="margin-top:0;font-size:12.5px;line-height:1.6">
+                            Kunci dipakai lewat header <code>Authorization: Bearer &lt;token&gt;</code> pada endpoint admin.
+                            Token hanya ditampilkan sekali, saat kunci dibuat.
+                        </p>
+                        <div id="api-key-list">
+                            ${
+                                apiKeys.length
+                                    ? apiKeys.map(apiKeyRow).join('')
+                                    : '<p class="page-note">Belum ada kunci API.</p>'
+                            }
+                        </div>
+                        <div class="divider"></div>
+                        <div class="eyebrow mb-8">Buat kunci baru</div>
+                        <form id="api-key-form" class="form-grid" autocomplete="off">
+                            ${field(
+                                'Nama',
+                                '<input class="input" name="name" maxlength="80" placeholder="CI pipeline" required />'
+                            )}
+                            ${field(
+                                'Cakupan',
+                                `<select class="select" name="scope">
+                                    <option value="read">Baca saja</option>
+                                    <option value="write">Baca dan tulis</option>
+                                </select>`
+                            )}
+                            ${field(
+                                'Masa berlaku (hari)',
+                                '<input class="input" name="expiresInDays" type="number" min="0" max="3650" value="0" />',
+                                '0 berarti tidak pernah kedaluwarsa.'
+                            )}
+                            <div class="field full">
+                                <button class="btn ghost" type="submit">${icon('plus', 13)} Buat kunci</button>
                             </div>
                         </form>
                     </div>
@@ -463,6 +509,45 @@ function bindInteractions(root, ctx) {
         button.disabled = false;
     });
 
+    const apiKeyForm = root.querySelector('#api-key-form');
+    apiKeyForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const button = apiKeyForm.querySelector('button[type="submit"]');
+        button.disabled = true;
+        try {
+            const data = await endpoints.createApiKey({
+                name: apiKeyForm.name.value.trim(),
+                scope: apiKeyForm.scope.value,
+                expiresInDays: Number(apiKeyForm.expiresInDays.value || 0),
+            });
+            apiKeyForm.reset();
+            showApiKeyToken(data.token);
+            await ctx.reload();
+        } catch (error) {
+            ctx.notifyError(error);
+        }
+        button.disabled = false;
+    });
+
+    root.querySelectorAll('[data-revoke-key]').forEach((button) =>
+        button.addEventListener('click', async () => {
+            const id = Number(button.dataset.revokeKey);
+            const ok = await confirmDialog({
+                title: 'Cabut kunci API',
+                message: 'Pengguna yang memakai kunci ini langsung kehilangan akses. Tindakan ini tidak bisa dibatalkan.',
+                confirmLabel: 'Cabut kunci',
+            });
+            if (!ok) return;
+            try {
+                await endpoints.deleteApiKey(id);
+                toast('Kunci dicabut', '', 'ok');
+                await ctx.reload();
+            } catch (error) {
+                ctx.notifyError(error);
+            }
+        })
+    );
+
     const status = root.querySelector('#data-status');
     const fileInput = root.querySelector('#import-file');
 
@@ -582,6 +667,39 @@ function field(label, inner, hint = '', full = false) {
         ${inner}
         ${hint ? `<span class="hint">${escapeHtml(hint)}</span>` : ''}
     </div>`;
+}
+
+function apiKeyRow(key) {
+    const expired = key.expires_at && Number(key.expires_at) < Date.now();
+    return `<div class="kv" data-api-key="${key.id}">
+        <span class="k">${escapeHtml(key.name)}<span class="tiny muted mono"> ${escapeHtml(key.prefix)}…</span></span>
+        <span class="v">
+            ${key.scope === 'write' ? 'baca + tulis' : 'baca saja'}
+            ${expired ? '<span class="tiny muted"> · kedaluwarsa</span>' : ''}
+            <span class="tiny muted"> · dibuat ${fmtDate(key.created_at, false)}</span>
+            <span class="tiny muted"> · dipakai ${key.last_used_at ? timeAgo(key.last_used_at) : 'belum'}</span>
+            <button class="btn sm ghost" data-revoke-key="${key.id}">Cabut</button>
+        </span>
+    </div>`;
+}
+
+function showApiKeyToken(token) {
+    openModal({
+        title: 'Kunci API dibuat',
+        subtitle: 'Token hanya ditampilkan sekali. Simpan di tempat aman.',
+        body: `<div class="code" id="api-token">${escapeHtml(token)}</div>
+            <p class="page-note">Pakai header <code>Authorization: Bearer ${escapeHtml(
+                token
+            )}</code> pada endpoint admin.</p>`,
+        footer: `<button class="btn ghost" data-close>Tutup</button>
+            <button class="btn primary" id="copy-token">Salin token</button>`,
+        onMount(node) {
+            node.querySelector('#copy-token').addEventListener('click', async () => {
+                await copyText(token);
+                toast('Token disalin', '', 'ok');
+            });
+        },
+    });
 }
 
 function switchRow(name, title, description, on) {

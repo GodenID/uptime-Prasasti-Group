@@ -31,6 +31,7 @@ function shapeMonitor(row) {
         domainExpiryNotification: Boolean(row.domain_expiry_notification),
         dnsRecordType: row.dns_record_type || 'A',
         dnsResolver: row.dns_resolver || '',
+        options: parseJson(row.options, {}),
         parentId: row.parent_id === null || row.parent_id === undefined ? null : Number(row.parent_id),
         description: row.description || '',
         active: Boolean(row.active),
@@ -51,6 +52,11 @@ function shapeNotification(row) {
         config: parseJson(row.config, {}),
         active: Boolean(row.active),
         isDefault: Boolean(row.is_default),
+        events: String(row.events || '')
+            .split(',')
+            .map((value) => value.trim())
+            .filter(Boolean),
+        resendInterval: Number(row.resend_interval || 0),
         createdAt: Number(row.created_at),
     };
 }
@@ -71,6 +77,9 @@ function shapeStatusPage(row) {
         showPoweredBy: Boolean(row.show_powered_by),
         footerText: row.footer_text || '',
         customCss: row.custom_css || '',
+        domain: row.domain || '',
+        announcement: row.announcement || '',
+        lang: row.lang || 'id',
         createdAt: Number(row.created_at),
     };
 }

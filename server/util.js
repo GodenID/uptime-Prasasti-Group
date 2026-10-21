@@ -25,6 +25,10 @@ const MONITOR_TYPES = Object.freeze([
     'dns',
     'push',
     'group',
+    'redis',
+    'mqtt',
+    'docker',
+    'postgres',
 ]);
 
 const NOTIFICATION_TYPES = Object.freeze([
@@ -35,6 +39,9 @@ const NOTIFICATION_TYPES = Object.freeze([
     'ntfy',
     'gotify',
     'smtp',
+    'pushover',
+    'homeassistant',
+    'apprise',
 ]);
 
 const REGIONS = {
@@ -265,10 +272,12 @@ function percent(up, total) {
     return Number(((up / total) * 100).toFixed(4));
 }
 
+/**
+ * Awal hari UTC. Bucket harian memakai batas UTC supaya agregat uptime
+ * tidak bergantung pada zona waktu server.
+ */
 function floorToDay(timestamp) {
-    const date = new Date(timestamp);
-    date.setHours(0, 0, 0, 0);
-    return date.getTime();
+    return Math.floor(Number(timestamp) / 86400000) * 86400000;
 }
 
 module.exports = {

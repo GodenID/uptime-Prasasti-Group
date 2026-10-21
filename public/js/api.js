@@ -65,6 +65,9 @@ export const endpoints = {
     settings: (body) => api('/api/settings', { method: 'PATCH', body }),
     password: (current, next) => api('/api/password', { method: 'POST', body: { current, next } }),
     createUser: (username, password) => api('/api/users', { method: 'POST', body: { username, password } }),
+    apiKeys: () => api('/api/api-keys'),
+    createApiKey: (body) => api('/api/api-keys', { method: 'POST', body }),
+    deleteApiKey: (id) => api(`/api/api-keys/${id}`, { method: 'DELETE' }),
     exportData: () => api('/api/export'),
     importData: (data) => api('/api/import', { method: 'POST', body: { data } }),
 };

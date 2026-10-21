@@ -1,11 +1,11 @@
 'use strict';
 
 const { EventEmitter } = require('node:events');
-const { all, get, run, getSettings, getSetting } = require('./db');
-const { STATUS, now, clamp, percent, parseJson } = require('./util');
+const { all, get, run, getSettings, getSetting, setSetting } = require('./db');
+const { STATUS, now, clamp, percent, parseJson, floorToDay } = require('./util');
 const { runCheck } = require('./checks');
 const { dispatch } = require('./notifier');
-const { shapeBeat, shapeMonitor, shapeIncident } = require('./models');
+const { shapeBeat, shapeMonitor, shapeIncident, shapeNotification } = require('./models');
 
 const MIN_INTERVAL = 20;
 const DAY = 86400000;
@@ -18,6 +18,7 @@ class Engine {
         this.settings = getSettings();
         this.pruneTimer = null;
         this.maintenanceTimer = null;
+        this.resendState = new Map();
         this.started = false;
     }
 
@@ -36,6 +37,11 @@ class Engine {
         this.maintenanceTimer = setInterval(() => this.rollMaintenance(), 60 * 1000);
         this.maintenanceTimer.unref?.();
         this.prune();
+        try {
+            this.backfillDaily();
+        } catch (error) {
+            this.bus.emit('error', error);
+        }
     }
 
     stop() {
@@ -162,6 +168,7 @@ class Engine {
                 manual: Boolean(options.manual),
                 source: options.source || 'scheduler',
             });
+            this.updateGroupAncestors(monitor);
 
             if (this.started && !options.manual) {
                 const wait = outcome.retry
@@ -244,6 +251,15 @@ class Engine {
 
         if (important) {
             this.handleTransition(monitor, beat, previousStatus);
+            if (beat.status === STATUS.UP) {
+                for (const key of [...this.resendState.keys()]) {
+                    if (key.startsWith(`${monitor.id}:`)) {
+                        this.resendState.delete(key);
+                    }
+                }
+            }
+        } else if (status === STATUS.DOWN && previousStatus === STATUS.DOWN) {
+            this.maybeResend(monitor, beat);
         }
 
         if (result.cert && monitor.certExpiryNotification) {
@@ -275,6 +291,7 @@ class Engine {
                 certInfo ? JSON.stringify(certInfo) : null,
             ]
         );
+        this.recordDaily(monitor.id, timestamp, status, ping, duration);
         return {
             id: Number(info.lastInsertRowid),
             monitorId: monitor.id,
@@ -286,6 +303,74 @@ class Engine {
             duration,
             certInfo,
         };
+    }
+
+    /**
+     * Agregat harian per monitor, dipakai untuk rentang uptime panjang tanpa
+     * memindai seluruh tabel heartbeat.
+     */
+    recordDaily(monitorId, timestamp, status, ping, duration) {
+        const day = floorToDay(timestamp);
+        const hasPing = ping !== null && ping !== undefined && Number.isFinite(Number(ping));
+        run(
+            `INSERT INTO heartbeat_daily (monitor_id, day, up_count, down_count, pending_count, maintenance_count,
+                ping_sum, ping_count, downtime_ms)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(monitor_id, day) DO UPDATE SET
+                up_count = up_count + excluded.up_count,
+                down_count = down_count + excluded.down_count,
+                pending_count = pending_count + excluded.pending_count,
+                maintenance_count = maintenance_count + excluded.maintenance_count,
+                ping_sum = ping_sum + excluded.ping_sum,
+                ping_count = ping_count + excluded.ping_count,
+                downtime_ms = downtime_ms + excluded.downtime_ms`,
+            [
+                monitorId,
+                day,
+                status === STATUS.UP ? 1 : 0,
+                status === STATUS.DOWN ? 1 : 0,
+                status === STATUS.PENDING ? 1 : 0,
+                status === STATUS.MAINTENANCE ? 1 : 0,
+                hasPing ? Number(ping) : 0,
+                hasPing ? 1 : 0,
+                status === STATUS.DOWN ? duration : 0,
+            ]
+        );
+    }
+
+    /**
+     * Isi tabel agregat untuk denyut lama yang dibuat sebelum fitur ini ada.
+     */
+    backfillDaily() {
+        if (getSetting('dailyBackfill', '0') === '1') {
+            return 0;
+        }
+        const missing = all(
+            `SELECT h.monitor_id AS monitor_id, MIN(h.time) AS time
+             FROM heartbeat h
+             LEFT JOIN heartbeat_daily d
+               ON d.monitor_id = h.monitor_id
+              AND d.day = CAST(h.time / 86400000 AS INTEGER) * 86400000
+             WHERE d.day IS NULL
+             GROUP BY h.monitor_id, CAST(h.time / 86400000 AS INTEGER)`
+        );
+        for (const row of missing) {
+            const day = floorToDay(row.time);
+            run(
+                `INSERT INTO heartbeat_daily (monitor_id, day, up_count, down_count, pending_count,
+                    maintenance_count, ping_sum, ping_count, downtime_ms)
+                 SELECT monitor_id, ?,
+                    SUM(status = 1), SUM(status = 0), SUM(status = 2), SUM(status = 3),
+                    SUM(CASE WHEN status = 1 AND ping IS NOT NULL THEN ping ELSE 0 END),
+                    SUM(CASE WHEN status = 1 AND ping IS NOT NULL THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN status = 0 THEN duration ELSE 0 END)
+                 FROM heartbeat WHERE monitor_id = ? AND time >= ? AND time < ?
+                 ON CONFLICT(monitor_id, day) DO NOTHING`,
+                [day, row.monitor_id, day, day + DAY]
+            );
+        }
+        setSetting('dailyBackfill', '1');
+        return missing.length;
     }
 
     lastBeat(monitorId) {
@@ -384,17 +469,32 @@ class Engine {
             seen.add(row.id);
             merged.push(row);
         }
-        return merged.map((row) => ({ ...row, config: parseJson(row.config, {}) }));
+        return merged.map((row) => shapeNotification(row));
+    }
+
+    /**
+     * Kanal tanpa daftar peristiwa menerima semua peristiwa.
+     */
+    wantsEvent(notification, event) {
+        const events = notification.events || [];
+        if (!events.length) {
+            return true;
+        }
+        return events.includes(event);
     }
 
     async notify(monitor, payload) {
-        const recipients = this.recipients(monitor.id);
+        const event = payload.event || 'status';
+        const recipients = this.recipients(monitor.id).filter((item) => this.wantsEvent(item, event));
         if (!recipients.length) {
             return [];
         }
         const results = [];
         for (const notification of recipients) {
             const started = Date.now();
+            if (event === 'down') {
+                this.resendState.set(`${monitor.id}:${notification.id}`, started);
+            }
             try {
                 const message = await dispatch(notification, {
                     ...payload,
@@ -403,7 +503,7 @@ class Engine {
                 });
                 run(
                     'INSERT INTO notification_log (notification_id, monitor_id, event, ok, error, created_at) VALUES (?, ?, ?, 1, ?, ?)',
-                    [notification.id, monitor.id, payload.event || 'status', message || 'OK', Date.now()]
+                    [notification.id, monitor.id, event, message || 'OK', Date.now()]
                 );
                 results.push({ id: notification.id, ok: true, message });
             } catch (error) {
@@ -412,7 +512,7 @@ class Engine {
                     [
                         notification.id,
                         monitor.id,
-                        payload.event || 'status',
+                        event,
                         String(error.message).slice(0, 400),
                         Date.now(),
                     ]
@@ -427,6 +527,33 @@ class Engine {
             });
         }
         return results;
+    }
+
+    /**
+     * Kirim ulang notifikasi gangguan untuk kanal dengan interval pengulangan.
+     */
+    maybeResend(monitor, beat) {
+        const timestamp = now();
+        for (const notification of this.recipients(monitor.id)) {
+            const interval = Number(notification.resendInterval || 0);
+            if (!interval || !this.wantsEvent(notification, 'down')) {
+                continue;
+            }
+            const key = `${monitor.id}:${notification.id}`;
+            const last = this.resendState.get(key) || 0;
+            if (timestamp - last < interval * 60000) {
+                continue;
+            }
+            this.resendState.set(key, timestamp);
+            this.notify(monitor, {
+                title: `${monitor.name} masih mengalami gangguan`,
+                message: beat.msg,
+                status: 'down',
+                event: 'down',
+                time: beat.time,
+                resend: true,
+            }).catch((error) => this.bus.emit('error', error));
+        }
     }
 
     maybeCertificateAlert(monitor, cert) {
@@ -495,24 +622,82 @@ class Engine {
     // ---------- queries ----------
 
     uptime(monitorId, sinceMs) {
-        const row = get(
-            `SELECT
-                SUM(CASE WHEN status = 1 THEN 1 ELSE 0 END) AS up,
-                SUM(CASE WHEN status = 0 THEN 1 ELSE 0 END) AS down,
-                SUM(CASE WHEN status IN (0, 1) THEN 1 ELSE 0 END) AS total,
-                AVG(CASE WHEN status = 1 THEN ping END) AS avg_ping
-             FROM heartbeat WHERE monitor_id = ? AND time >= ?`,
-            [monitorId, sinceMs]
-        );
-        const up = Number(row?.up || 0);
-        const down = Number(row?.down || 0);
-        const total = Number(row?.total || 0);
+        const range = this.uptimeRange(monitorId, sinceMs, now());
+        return {
+            up: range.up,
+            down: range.down,
+            total: range.total,
+            uptime: range.uptime,
+            avgPing: range.avgPing,
+            downtime: range.downtime,
+        };
+    }
+
+    /**
+     * Uptime untuk rentang waktu. Hari yang sudah lewat memakai agregat
+     * harian, sedangkan bagian hari berjalan dihitung langsung dari denyut.
+     */
+    uptimeRange(monitorId, from, to) {
+        const start = Math.max(0, Number(from) || 0);
+        const end = Math.max(start, Number(to) || start);
+        const startDay = floorToDay(start);
+        const endDay = floorToDay(end);
+        const firstFullDay = start === startDay ? startDay : startDay + DAY;
+        const rawEnd = Math.min(firstFullDay, endDay);
+
+        let up = 0;
+        let down = 0;
+        let pingSum = 0;
+        let pingCount = 0;
+        let downtime = 0;
+
+        const addRaw = (fromTs, toTs) => {
+            if (toTs <= fromTs) {
+                return;
+            }
+            const row = get(
+                `SELECT SUM(CASE WHEN status = 1 THEN 1 ELSE 0 END) AS up,
+                        SUM(CASE WHEN status = 0 THEN 1 ELSE 0 END) AS down,
+                        SUM(CASE WHEN status = 1 AND ping IS NOT NULL THEN ping ELSE 0 END) AS ping_sum,
+                        SUM(CASE WHEN status = 1 AND ping IS NOT NULL THEN 1 ELSE 0 END) AS ping_count,
+                        SUM(CASE WHEN status = 0 THEN duration ELSE 0 END) AS downtime
+                 FROM heartbeat WHERE monitor_id = ? AND time >= ? AND time < ?`,
+                [monitorId, fromTs, toTs]
+            );
+            up += Number(row?.up || 0);
+            down += Number(row?.down || 0);
+            pingSum += Number(row?.ping_sum || 0);
+            pingCount += Number(row?.ping_count || 0);
+            downtime += Number(row?.downtime || 0);
+        };
+
+        addRaw(start, rawEnd);
+
+        if (firstFullDay < endDay) {
+            const daily = get(
+                `SELECT SUM(up_count) AS up, SUM(down_count) AS down,
+                        SUM(ping_sum) AS ping_sum, SUM(ping_count) AS ping_count,
+                        SUM(downtime_ms) AS downtime
+                 FROM heartbeat_daily WHERE monitor_id = ? AND day >= ? AND day < ?`,
+                [monitorId, firstFullDay, endDay]
+            );
+            up += Number(daily?.up || 0);
+            down += Number(daily?.down || 0);
+            pingSum += Number(daily?.ping_sum || 0);
+            pingCount += Number(daily?.ping_count || 0);
+            downtime += Number(daily?.downtime || 0);
+        }
+
+        addRaw(Math.max(start, endDay), end);
+
+        const total = up + down;
         return {
             up,
             down,
             total,
             uptime: percent(up, total),
-            avgPing: row?.avg_ping === null || row?.avg_ping === undefined ? null : Math.round(Number(row.avg_ping) * 10) / 10,
+            avgPing: pingCount ? Math.round((pingSum / pingCount) * 10) / 10 : null,
+            downtime,
         };
     }
 
@@ -562,6 +747,48 @@ class Engine {
         );
     }
 
+    /**
+     * Status grup diturunkan dari monitor anak. Grup juga punya denyut sendiri
+     * supaya uptime dan riwayat grup tidak kosong.
+     */
+    updateGroupAncestors(monitor) {
+        let parentId = monitor.parent_id ?? monitor.parentId ?? null;
+        const visited = new Set();
+        while (parentId && !visited.has(parentId)) {
+            visited.add(parentId);
+            const parent = get('SELECT * FROM monitor WHERE id = ?', [parentId]);
+            if (!parent) {
+                break;
+            }
+            const children = all('SELECT id, interval FROM monitor WHERE parent_id = ?', [parentId]);
+            const statuses = children.map((child) => {
+                const beat = this.lastBeat(child.id);
+                return beat ? beat.status : STATUS.PENDING;
+            });
+            const status = this.computeGroupStatus(statuses);
+            const previous = this.lastBeat(parentId);
+            const interval = children.length
+                ? Math.max(
+                      MIN_INTERVAL,
+                      Math.min(...children.map((child) => Number(child.interval) || 60))
+                  )
+                : MIN_INTERVAL;
+            const due =
+                !previous || previous.status !== status || now() - previous.time >= interval * 1000;
+            if (due) {
+                const healthy = statuses.filter((item) => item === STATUS.UP).length;
+                const beat = this.insertBeat(parent, {
+                    status,
+                    msg: `${healthy} dari ${children.length} monitor anak sehat`,
+                    ping: null,
+                    important: Boolean(previous && previous.status !== status),
+                });
+                this.broadcastBeat(parent, beat);
+            }
+            parentId = parent.parent_id;
+        }
+    }
+
     computeGroupStatus(children) {
         if (!children.length) {
             return STATUS.PENDING;
@@ -590,7 +817,11 @@ class Engine {
             status = this.computeGroupStatus(childSummaries);
         }
         const day = this.uptime(monitor.id, now() - DAY);
-        const beats = monitor.type === 'group' ? childSummaries[0]?.beats || [] : this.beats(monitor.id, limit);
+        const ownBeats = this.beats(monitor.id, limit);
+        const beats =
+            ownBeats.length || monitor.type !== 'group'
+                ? ownBeats
+                : childSummaries[0]?.beats || [];
         const cert = this.certInfo(monitor.id);
         return {
             ...monitor,
@@ -653,6 +884,7 @@ class Engine {
         const retention = clamp(this.settings.retentionDays || 180, 1, 3650, 180) * DAY;
         run('DELETE FROM heartbeat WHERE time < ? AND important = 0', [now() - retention]);
         run('DELETE FROM heartbeat WHERE time < ?', [now() - retention * 2]);
+        run('DELETE FROM heartbeat_daily WHERE day < ?', [now() - retention * 2]);
         run('DELETE FROM notification_log WHERE created_at < ?', [now() - 90 * DAY]);
         run('DELETE FROM session WHERE expires_at < ?', [now()]);
     }
@@ -677,6 +909,7 @@ class Engine {
             this.handleTransition(monitor, beat, previous ? Number(previous.status) : null);
         }
         this.broadcastBeat(monitor, beat);
+        this.updateGroupAncestors(monitor);
         return beat;
     }
 

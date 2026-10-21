@@ -18,6 +18,16 @@ const PROVIDERS = [
     { id: 'ntfy', label: 'ntfy', glyph: 'n' },
     { id: 'gotify', label: 'Gotify', glyph: 'G' },
     { id: 'smtp', label: 'Email SMTP', glyph: '@' },
+    { id: 'pushover', label: 'Pushover', glyph: 'P' },
+    { id: 'homeassistant', label: 'Home Assistant', glyph: 'H' },
+    { id: 'apprise', label: 'Apprise', glyph: 'A' },
+];
+
+const EVENTS = [
+    { id: 'down', label: 'Gangguan', color: '#b8452f' },
+    { id: 'up', label: 'Pemulihan', color: '#2f9e74' },
+    { id: 'certificate', label: 'Sertifikat', color: '#a9793f' },
+    { id: 'domain', label: 'Domain', color: '#8a7a5c' },
 ];
 
 export async function render(root, ctx) {
@@ -148,6 +158,16 @@ export async function render(root, ctx) {
 function rowHtml(notification) {
     const provider = PROVIDERS.find((item) => item.id === notification.type);
     const description = describe(notification);
+    const eventLabels = (notification.events || []).map(
+        (event) => EVENTS.find((item) => item.id === event)?.label || event
+    );
+    const extras = [];
+    if (eventLabels.length) {
+        extras.push(`peristiwa: ${eventLabels.join(', ')}`);
+    }
+    if (notification.resendInterval) {
+        extras.push(`ulang tiap ${notification.resendInterval} mnt`);
+    }
     return `<div class="row-card">
         <div class="provider" style="width:44px;height:44px;padding:0;cursor:default">
             <span class="glyph">${escapeHtml(provider?.glyph || '?')}</span>
@@ -160,7 +180,9 @@ function rowHtml(notification) {
     }</span>
                 ${notification.isDefault ? '<span class="tag">Default</span>' : ''}
             </div>
-            <div class="meta">${escapeHtml(provider?.label || notification.type)} · ${escapeHtml(description)}</div>
+            <div class="meta">${escapeHtml(provider?.label || notification.type)} · ${escapeHtml(description)}${
+        extras.length ? ` · ${escapeHtml(extras.join(' · '))}` : ''
+    }</div>
         </div>
         <div class="actions">
             <button class="btn sm ghost" data-test="${notification.id}">${icon('bell', 13)} Uji</button>
@@ -186,6 +208,12 @@ function describe(notification) {
             return config.serverUrl || 'Server belum diisi';
         case 'smtp':
             return config.to ? `Ke ${config.to}` : 'Penerima belum diisi';
+        case 'pushover':
+            return config.user ? `Pengguna ${config.user}` : 'Pengguna belum diisi';
+        case 'homeassistant':
+            return config.webhookUrl ? 'Webhook terpasang' : 'Webhook belum diisi';
+        case 'apprise':
+            return config.serverUrl || 'Server belum diisi';
         default:
             return '';
     }
@@ -351,11 +379,95 @@ function openForm(notification, ctx) {
                             <div class="switch-text"><b>Koneksi TLS langsung (SMTPS)</b><span>Aktifkan untuk port 465.</span></div>
                         </div>
                     </div>
+
+                    <div data-fields="pushover" class="field">
+                        <label>Token aplikasi</label>
+                        ${input('pushoverToken', config.token, 'aBcDeFgHiJkLmNoPq')}
+                    </div>
+                    <div data-fields="pushover" class="field">
+                        <label>Kunci pengguna atau grup</label>
+                        ${input('pushoverUser', config.user, 'uQi1234567890')}
+                    </div>
+                    <div data-fields="pushover" class="field">
+                        <label>Prioritas</label>
+                        <select class="select" name="pushoverPriority">
+                            ${[-2, -1, 0, 1, 2]
+                                .map(
+                                    (priority) =>
+                                        `<option value="${priority}" ${
+                                            Number(config.priority ?? 0) === priority ? 'selected' : ''
+                                        }>${priority}</option>`
+                                )
+                                .join('')}
+                        </select>
+                    </div>
+                    <div data-fields="pushover" class="field">
+                        <label>Perangkat (opsional)</label>
+                        ${input('pushoverDevice', config.device, '')}
+                    </div>
+                    <div data-fields="pushover" class="field">
+                        <label>Suara (opsional)</label>
+                        ${input('pushoverSound', config.sound, '')}
+                    </div>
+                    <div data-fields="pushover" class="field full">
+                        <label>Tautan (opsional)</label>
+                        ${input('pushoverUrl', config.url, 'https://status.contoh.id')}
+                    </div>
+
+                    <div data-fields="homeassistant" class="field full">
+                        <label>URL webhook Home Assistant</label>
+                        ${input('haWebhookUrl', config.webhookUrl, 'https://ha.contoh.id/api/webhook/xxxxxxxx')}
+                        <span class="hint">Buat webhook lewat integrasi “Webhook” di Home Assistant.</span>
+                    </div>
+                    <div data-fields="homeassistant" class="field full">
+                        <label>Token akses (opsional)</label>
+                        ${input('haToken', config.accessToken, '', 'password')}
+                    </div>
+
+                    <div data-fields="apprise" class="field full">
+                        <label>Server Apprise API</label>
+                        ${input('appriseServer', config.serverUrl, 'http://apprise:8000')}
+                        <span class="hint">Boleh berisi token target, contoh: http://apprise:8000/notify/token-saya.</span>
+                    </div>
+                    <div data-fields="apprise" class="field full">
+                        <label>Daftar URL target (opsional)</label>
+                        <textarea class="textarea" name="appriseUrls" placeholder="mailto://contoh@domain.id&#10;discord://webhook_id/token">${escapeHtml(
+                            config.urls || ''
+                        )}</textarea>
+                        <span class="hint">Satu URL Apprise per baris. Kosongkan bila memakai token target.</span>
+                    </div>
+                    <div data-fields="apprise" class="field full">
+                        <label>Token akses (opsional)</label>
+                        ${input('appriseToken', config.token, '', 'password')}
+                    </div>
                 </div>
 
                 <div class="divider"></div>
                 ${switchRow('active', 'Kanal aktif', 'Nonaktifkan untuk menghentikan pengiriman tanpa menghapus konfigurasi.', notification?.active ?? true)}
                 ${switchRow('isDefault', 'Kanal default', 'Terima semua peristiwa, termasuk monitor tanpa penugasan.', notification?.isDefault ?? false)}
+
+                <div class="divider"></div>
+                <div class="eyebrow" style="margin-bottom:6px">Peristiwa yang dikirim</div>
+                <div class="chip-picker" id="event-picker">
+                    ${EVENTS.map(
+                        (event) => `<button type="button" class="chip ${
+                            (notification?.events || []).includes(event.id) ? 'on' : ''
+                        }" data-event="${event.id}"><span class="dot" style="background:${event.color}"></span>${
+                            escapeHtml(event.label)
+                        }</button>`
+                    ).join('')}
+                </div>
+                <span class="hint">Tanpa pilihan, kanal menerima semua peristiwa.</span>
+
+                <div class="form-grid mt-16">
+                    ${field(
+                        'Ulangi notifikasi tiap (menit)',
+                        `<input class="input" name="resendInterval" type="number" min="0" max="1440" value="${escapeHtml(
+                            notification?.resendInterval ?? 0
+                        )}" />`,
+                        '0 berarti kirim sekali saat gangguan terjadi.'
+                    )}
+                </div>
                 <div id="notification-error"></div>
             </form>
         `,
@@ -387,6 +499,10 @@ function openForm(notification, ctx) {
     });
 
     form.querySelectorAll('.switch').forEach((button) =>
+        button.addEventListener('click', () => button.classList.toggle('on'))
+    );
+
+    form.querySelectorAll('[data-event]').forEach((button) =>
         button.addEventListener('click', () => button.classList.toggle('on'))
     );
 
@@ -440,6 +556,26 @@ function openForm(notification, ctx) {
                 subjectPrefix: form.smtpSubject.value,
                 secure: form.smtpSecure.classList.contains('on'),
             };
+        } else if (selected === 'pushover') {
+            providerConfig = {
+                token: form.pushoverToken.value.trim(),
+                user: form.pushoverUser.value.trim(),
+                priority: Number(form.pushoverPriority.value || 0),
+                device: form.pushoverDevice.value.trim(),
+                sound: form.pushoverSound.value.trim(),
+                url: form.pushoverUrl.value.trim(),
+            };
+        } else if (selected === 'homeassistant') {
+            providerConfig = {
+                webhookUrl: form.haWebhookUrl.value.trim(),
+                accessToken: form.haToken.value,
+            };
+        } else if (selected === 'apprise') {
+            providerConfig = {
+                serverUrl: form.appriseServer.value.trim(),
+                urls: form.appriseUrls.value.trim(),
+                token: form.appriseToken.value,
+            };
         }
 
         const payload = {
@@ -448,6 +584,8 @@ function openForm(notification, ctx) {
             config: providerConfig,
             active: form.active.classList.contains('on'),
             isDefault: form.isDefault.classList.contains('on'),
+            events: [...form.querySelectorAll('[data-event].on')].map((item) => item.dataset.event),
+            resendInterval: Number(form.resendInterval.value || 0),
         };
 
         try {

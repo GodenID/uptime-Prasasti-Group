@@ -37,6 +37,11 @@ const {
     recordFailure,
     clearFailures,
     parseCookies,
+    createApiKey,
+    findApiKey,
+    touchApiKey,
+    listApiKeys,
+    revokeApiKey,
 } = require('./auth');
 const {
     shapeMonitor,
@@ -48,7 +53,7 @@ const {
 } = require('./models');
 const engine = require('./engine');
 const { dispatch } = require('./notifier');
-const { statusPagePayload } = require('./statuspage');
+const { statusPagePayload, getPageByDomain } = require('./statuspage');
 
 class ApiError extends Error {
     constructor(status, message) {
@@ -59,6 +64,52 @@ class ApiError extends Error {
 
 const TYPES = new Set(MONITOR_TYPES);
 const NOTIFICATION_SET = new Set(NOTIFICATION_TYPES);
+const NOTIFICATION_EVENTS = ['down', 'up', 'certificate', 'domain'];
+
+const DEFAULT_PORTS = {
+    redis: 6379,
+    mqtt: 1883,
+    postgres: 5432,
+};
+
+/**
+ * Opsi khusus per tipe monitor, disimpan sebagai satu kolom JSON.
+ */
+function validateOptions(type, source) {
+    const raw = source.options && typeof source.options === 'object' ? source.options : parseJson(source.options, {});
+    const options = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+    const clean = {};
+    if (type === 'redis') {
+        clean.password = String(options.password || '').slice(0, 200);
+        clean.db = Math.round(clamp(options.db, 0, 1024, 0));
+        clean.command = String(options.command || 'PING').trim().slice(0, 200) || 'PING';
+        clean.expected = String(options.expected || '').slice(0, 200);
+    }
+    if (type === 'mqtt') {
+        clean.topic = String(options.topic || '').trim().slice(0, 200);
+        if (!clean.topic) {
+            throw new ApiError(400, 'Topik MQTT wajib diisi');
+        }
+        clean.username = String(options.username || '').slice(0, 200);
+        clean.password = String(options.password || '').slice(0, 200);
+        clean.clientId = String(options.clientId || '').slice(0, 100);
+        clean.expected = String(options.expected || '').slice(0, 200);
+    }
+    if (type === 'docker') {
+        clean.container = String(options.container || '').trim().slice(0, 200);
+        if (!clean.container) {
+            throw new ApiError(400, 'Nama container wajib diisi');
+        }
+        clean.socket = String(options.socket || '').slice(0, 300);
+    }
+    if (type === 'postgres') {
+        clean.user = String(options.user || 'postgres').trim().slice(0, 100) || 'postgres';
+        clean.password = String(options.password || '').slice(0, 200);
+        clean.database = String(options.database || '').trim().slice(0, 100);
+        clean.query = String(options.query || 'SELECT 1').trim().slice(0, 500) || 'SELECT 1';
+    }
+    return clean;
+}
 
 function sendJson(res, status, payload) {
     const body = JSON.stringify(payload);
@@ -100,7 +151,26 @@ function currentUser(req) {
     return getSessionUser(cookies.prasasti_sid);
 }
 
+/**
+ * Autentikasi admin: sesi cookie, atau kunci API lewat header Authorization.
+ * Kunci API membawa cakupan ('read' atau 'write') yang diperiksa pemanggil.
+ */
 function requireUser(req) {
+    const header = String(req.headers.authorization || '');
+    if (header.toLowerCase().startsWith('bearer ')) {
+        const token = header.slice(7).trim();
+        const key = findApiKey(token);
+        if (!key) {
+            throw new ApiError(401, 'Kunci API tidak dikenal atau sudah kedaluwarsa');
+        }
+        touchApiKey(key.id);
+        return {
+            id: Number(key.user_id),
+            username: `api:${key.prefix}`,
+            scope: key.scope,
+            viaApiKey: true,
+        };
+    }
     const user = currentUser(req);
     if (!user) {
         throw new ApiError(401, 'Silakan masuk terlebih dahulu');
@@ -152,6 +222,22 @@ function validateMonitorInput(body, existing = null) {
         } else {
             port = null;
         }
+        url = '';
+    } else if (['redis', 'mqtt', 'postgres'].includes(type)) {
+        if (!hostname) {
+            throw new ApiError(400, 'Hostname wajib diisi');
+        }
+        if (/^https?:\/\//i.test(hostname)) {
+            hostname = new URL(hostname).hostname;
+        }
+        port = port ? Number(port) : DEFAULT_PORTS[type];
+        if (!Number.isFinite(port) || port < 1 || port > 65535) {
+            throw new ApiError(400, 'Port wajib diisi (1-65535)');
+        }
+        url = '';
+    } else if (type === 'docker') {
+        hostname = hostname ? String(hostname).trim() : '';
+        port = null;
         url = '';
     } else {
         url = '';
@@ -226,6 +312,7 @@ function validateMonitorInput(body, existing = null) {
         domain_expiry_notification: bool(source.domainExpiryNotification) ? 1 : 0,
         dns_record_type: dnsRecordType,
         dns_resolver: String(source.dnsResolver || ''),
+        options: JSON.stringify(validateOptions(type, source)),
         parent_id: parentId,
         description: String(source.description || '').slice(0, 1000),
         active: bool(source.active, true) ? 1 : 0,
@@ -247,15 +334,16 @@ function saveMonitor(body, id = null) {
                 `UPDATE monitor SET name=?, type=?, url=?, hostname=?, port=?, method=?, headers=?, body=?,
                  interval=?, retries=?, retry_interval=?, timeout=?, upside_down=?, keyword=?, json_path=?,
                  expected_value=?, accepted_codes=?, max_redirects=?, ignore_tls=?, cert_expiry_notification=?,
-                 domain_expiry_notification=?, dns_record_type=?, dns_resolver=?, parent_id=?, description=?,
-                 active=?, updated_at=? WHERE id=?`,
+                 domain_expiry_notification=?, dns_record_type=?, dns_resolver=?, options=?, parent_id=?,
+                 description=?, active=?, updated_at=? WHERE id=?`,
                 [
                     values.name, values.type, values.url, values.hostname, values.port, values.method,
                     values.headers, values.body, values.interval, values.retries, values.retry_interval,
                     values.timeout, values.upside_down, values.keyword, values.json_path, values.expected_value,
                     values.accepted_codes, values.max_redirects, values.ignore_tls,
                     values.cert_expiry_notification, values.domain_expiry_notification, values.dns_record_type,
-                    values.dns_resolver, values.parent_id, values.description, values.active, timestamp, id,
+                    values.dns_resolver, values.options, values.parent_id, values.description, values.active,
+                    timestamp, id,
                 ]
             );
         } else {
@@ -264,16 +352,16 @@ function saveMonitor(body, id = null) {
                 `INSERT INTO monitor (name, type, url, hostname, port, method, headers, body, interval, retries,
                  retry_interval, timeout, upside_down, keyword, json_path, expected_value, accepted_codes,
                  max_redirects, ignore_tls, cert_expiry_notification, domain_expiry_notification, dns_record_type,
-                 dns_resolver, parent_id, description, active, push_token, created_at, updated_at)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+                 dns_resolver, options, parent_id, description, active, push_token, created_at, updated_at)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
                 [
                     values.name, values.type, values.url, values.hostname, values.port, values.method,
                     values.headers, values.body, values.interval, values.retries, values.retry_interval,
                     values.timeout, values.upside_down, values.keyword, values.json_path, values.expected_value,
                     values.accepted_codes, values.max_redirects, values.ignore_tls,
                     values.cert_expiry_notification, values.domain_expiry_notification, values.dns_record_type,
-                    values.dns_resolver, values.parent_id, values.description, values.active, pushToken,
-                    timestamp, timestamp,
+                    values.dns_resolver, values.options, values.parent_id, values.description, values.active,
+                    pushToken, timestamp, timestamp,
                 ]
             );
             monitorId = Number(info.lastInsertRowid);
@@ -324,12 +412,22 @@ function validateNotification(body, existing = null) {
         throw new ApiError(400, 'Tipe notifikasi tidak dikenal');
     }
     const config = source.config && typeof source.config === 'object' ? source.config : parseJson(source.config, {});
+    const rawEvents = Array.isArray(source.events)
+        ? source.events
+        : String(source.events || '')
+              .split(',')
+              .map((value) => value.trim());
+    const events = rawEvents
+        .map((value) => String(value).trim())
+        .filter((value) => NOTIFICATION_EVENTS.includes(value));
     return {
         name,
         type,
         config: JSON.stringify(config || {}),
         active: bool(source.active, true) ? 1 : 0,
         is_default: bool(source.isDefault) ? 1 : 0,
+        events: events.join(','),
+        resend_interval: Number(clamp(source.resendInterval, 0, 1440, 0).toFixed(2)),
     };
 }
 
@@ -340,13 +438,20 @@ function saveNotification(body, id = null) {
     }
     const values = validateNotification(body, existing);
     if (id) {
-        run('UPDATE notification SET name=?, type=?, config=?, active=?, is_default=? WHERE id=?', [
-            values.name, values.type, values.config, values.active, values.is_default, id,
-        ]);
+        run(
+            'UPDATE notification SET name=?, type=?, config=?, active=?, is_default=?, events=?, resend_interval=? WHERE id=?',
+            [
+                values.name, values.type, values.config, values.active, values.is_default, values.events,
+                values.resend_interval, id,
+            ]
+        );
     } else {
         const info = run(
-            'INSERT INTO notification (name, type, config, active, is_default, created_at) VALUES (?,?,?,?,?,?)',
-            [values.name, values.type, values.config, values.active, values.is_default, now()]
+            'INSERT INTO notification (name, type, config, active, is_default, events, resend_interval, created_at) VALUES (?,?,?,?,?,?,?,?)',
+            [
+                values.name, values.type, values.config, values.active, values.is_default, values.events,
+                values.resend_interval, now(),
+            ]
         );
         id = Number(info.lastInsertRowid);
     }
@@ -424,6 +529,22 @@ function saveStatusPage(body, id = null) {
     if (duplicate) {
         throw new ApiError(400, 'Slug sudah dipakai status page lain');
     }
+    let domain = String(source.domain || '')
+        .trim()
+        .toLowerCase()
+        .replace(/^https?:\/\//, '')
+        .replace(/\/.*$/, '')
+        .replace(/:\d+$/, '');
+    if (domain && !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(domain)) {
+        throw new ApiError(400, 'Domain kustom tidak valid. Contoh: status.contoh.id');
+    }
+    if (domain) {
+        const domainOwner = get('SELECT id FROM status_page WHERE domain = ? AND id != ?', [domain, id || 0]);
+        if (domainOwner) {
+            throw new ApiError(400, 'Domain kustom sudah dipakai status page lain');
+        }
+    }
+    const lang = ['id', 'en', 'auto'].includes(source.lang) ? source.lang : 'id';
     const values = {
         slug,
         title: title.slice(0, 150),
@@ -435,6 +556,9 @@ function saveStatusPage(body, id = null) {
         show_powered_by: bool(source.showPoweredBy, true) ? 1 : 0,
         footer_text: String(source.footerText || '').slice(0, 300),
         custom_css: String(source.customCss || '').slice(0, 20000),
+        domain,
+        announcement: String(source.announcement || '').slice(0, 2000),
+        lang,
     };
 
     let pageId = id;
@@ -442,19 +566,22 @@ function saveStatusPage(body, id = null) {
         if (id) {
             run(
                 `UPDATE status_page SET slug=?, title=?, description=?, icon=?, theme=?, published=?, show_tags=?,
-                 show_powered_by=?, footer_text=?, custom_css=? WHERE id=?`,
+                 show_powered_by=?, footer_text=?, custom_css=?, domain=?, announcement=?, lang=? WHERE id=?`,
                 [
                     values.slug, values.title, values.description, values.icon, values.theme, values.published,
-                    values.show_tags, values.show_powered_by, values.footer_text, values.custom_css, id,
+                    values.show_tags, values.show_powered_by, values.footer_text, values.custom_css, values.domain,
+                    values.announcement, values.lang, id,
                 ]
             );
         } else {
             const info = run(
                 `INSERT INTO status_page (slug, title, description, icon, theme, published, show_tags,
-                 show_powered_by, footer_text, custom_css, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+                 show_powered_by, footer_text, custom_css, domain, announcement, lang, created_at)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
                 [
                     values.slug, values.title, values.description, values.icon, values.theme, values.published,
-                    values.show_tags, values.show_powered_by, values.footer_text, values.custom_css, now(),
+                    values.show_tags, values.show_powered_by, values.footer_text, values.custom_css, values.domain,
+                    values.announcement, values.lang, now(),
                 ]
             );
             pageId = Number(info.lastInsertRowid);
@@ -684,9 +811,15 @@ async function handleApi(req, res, url, readBody) {
             return sendJson(res, 200, { user: user || null, needSetup: countUsers() === 0 });
         }
 
-        if (path.startsWith('/api/status-page/') && method === 'GET') {
-            const slug = decodeURIComponent(path.slice('/api/status-page/'.length));
-            const row = get('SELECT * FROM status_page WHERE slug = ?', [slug]);
+        if ((path === '/api/status-page' || path.startsWith('/api/status-page/')) && method === 'GET') {
+            const slug =
+                path === '/api/status-page'
+                    ? ''
+                    : decodeURIComponent(path.slice('/api/status-page/'.length));
+            const host = String(req.headers.host || '').split(':')[0];
+            const row = slug
+                ? get('SELECT * FROM status_page WHERE slug = ?', [slug])
+                : getPageByDomain(host);
             if (!row || !row.published) {
                 throw new ApiError(404, 'Status page tidak ditemukan');
             }
@@ -745,6 +878,14 @@ async function handleApi(req, res, url, readBody) {
 
         // ---------- authenticated ----------
         const user = requireUser(req);
+        if (user.viaApiKey) {
+            if (mutation && user.scope !== 'write') {
+                throw new ApiError(403, 'Kunci API ini hanya punya akses baca');
+            }
+            if (path.startsWith('/api/api-keys')) {
+                throw new ApiError(403, 'Kunci API tidak dapat mengelola kunci API lain');
+            }
+        }
 
         if (path === '/api/bootstrap' && method === 'GET') {
             const settings = getSettings();
@@ -759,6 +900,7 @@ async function handleApi(req, res, url, readBody) {
                 maintenances: all('SELECT * FROM maintenance ORDER BY start_at DESC').map((row) => maintenanceDetail(row.id)),
                 incidents: all('SELECT * FROM incident ORDER BY started_at DESC LIMIT 100').map(shapeIncident),
                 stats: engine.stats(),
+                apiKeys: listApiKeys(user.id),
                 serverTime: now(),
                 version: '1.0.0',
             });
@@ -798,6 +940,7 @@ async function handleApi(req, res, url, readBody) {
                         '24h': engine.uptime(monitorId, nowTs - 86400000),
                         '7d': engine.uptime(monitorId, nowTs - 7 * 86400000),
                         '30d': engine.uptime(monitorId, nowTs - 30 * 86400000),
+                        '90d': engine.uptime(monitorId, nowTs - 90 * 86400000),
                         '365d': engine.uptime(monitorId, nowTs - 365 * 86400000),
                     },
                     events: all(
@@ -1174,6 +1317,41 @@ async function handleApi(req, res, url, readBody) {
             return sendJson(res, 201, { ok: true });
         }
 
+        if (path === '/api/api-keys' && method === 'GET') {
+            return sendJson(res, 200, { keys: listApiKeys(user.id) });
+        }
+
+        if (path === '/api/api-keys' && method === 'POST') {
+            const body = await readBody(req);
+            const name = String(body.name || '').trim();
+            if (!name) {
+                throw new ApiError(400, 'Nama kunci wajib diisi');
+            }
+            const scope = body.scope === 'write' ? 'write' : 'read';
+            const created = createApiKey(user.id, {
+                name,
+                scope,
+                expiresInDays: clamp(body.expiresInDays, 0, 3650, 0),
+            });
+            return sendJson(res, 201, {
+                key: {
+                    id: created.id,
+                    name: created.name,
+                    scope: created.scope,
+                    prefix: created.prefix,
+                    createdAt: created.createdAt,
+                    expiresAt: created.expiresAt,
+                },
+                token: created.token,
+            });
+        }
+
+        const apiKeyMatch = path.match(/^\/api\/api-keys\/(\d+)$/);
+        if (apiKeyMatch && method === 'DELETE') {
+            revokeApiKey(Number(apiKeyMatch[1]), user.id);
+            return sendJson(res, 200, { ok: true });
+        }
+
         if (path === '/api/export' && method === 'GET') {
             const monitors = all('SELECT * FROM monitor').map((row) => ({
                 ...shapeMonitor(row),
@@ -1217,6 +1395,9 @@ async function handleApi(req, res, url, readBody) {
                     type: notification.type,
                     config: notification.config,
                     active: notification.active,
+                    isDefault: notification.isDefault,
+                    events: notification.events,
+                    resendInterval: notification.resendInterval,
                 });
                 notificationIds[notification.id] = saved.id;
                 imported.notifications += 1;

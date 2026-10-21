@@ -417,6 +417,112 @@ async function dispatch(notification, payload) {
             return 'Email terkirim';
         }
 
+        case 'pushover': {
+            if (!config.token || !config.user) {
+                throw new Error('Token aplikasi atau kunci pengguna Pushover belum diisi');
+            }
+            const form = new URLSearchParams({
+                token: config.token,
+                user: config.user,
+                title,
+                message: payload.message || statusLabel(payload.status),
+                priority: String(config.priority ?? 0),
+                timestamp: String(Math.floor((payload.time || now()) / 1000)),
+            });
+            if (config.device) {
+                form.set('device', config.device);
+            }
+            if (config.sound) {
+                form.set('sound', config.sound);
+            }
+            if (config.url) {
+                form.set('url', config.url);
+            }
+            const response = await fetch('https://api.pushover.net/1/messages.json', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: form.toString(),
+                signal: AbortSignal.timeout(12000),
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok || result.status !== 1) {
+                throw new Error(
+                    result.errors?.join(', ') || `Pushover HTTP ${response.status}`
+                );
+            }
+            return 'Pushover terkirim';
+        }
+
+        case 'homeassistant': {
+            if (!config.webhookUrl) {
+                throw new Error('Webhook Home Assistant belum diisi');
+            }
+            const headers = { 'Content-Type': 'application/json' };
+            if (config.accessToken) {
+                headers.Authorization = `Bearer ${config.accessToken}`;
+            }
+            const response = await fetch(config.webhookUrl, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    title,
+                    message: payload.message || statusLabel(payload.status),
+                    status: payload.status,
+                    event: payload.event || 'status',
+                    monitor: monitor.name || null,
+                    monitor_url: monitorUrl || null,
+                    time: new Date(payload.time || now()).toISOString(),
+                }),
+                signal: AbortSignal.timeout(12000),
+            });
+            if (!response.ok) {
+                throw new Error(`Home Assistant HTTP ${response.status}`);
+            }
+            return 'Home Assistant terkirim';
+        }
+
+        case 'apprise': {
+            const server = String(config.serverUrl || '').trim();
+            if (!server) {
+                throw new Error('Server Apprise belum diisi');
+            }
+            const type =
+                payload.status === 'down' ? 'failure' : payload.status === 'up' ? 'success' : 'warning';
+            const body = {
+                title,
+                body: textBlock(payload),
+                type,
+                format: 'text',
+            };
+            const headers = { 'Content-Type': 'application/json' };
+            if (config.token) {
+                headers.Authorization = `Bearer ${config.token}`;
+            }
+            const urls = String(config.urls || '')
+                .split(/[\n,]/)
+                .map((value) => value.trim())
+                .filter(Boolean);
+            // Apprise API: /notify/<token> memakai target yang tersimpan,
+            // sedangkan /notify menerima daftar URL pada payload.
+            const target = server.includes('/notify/') ? server : `${server.replace(/\/+$/, '')}/notify`;
+            if (!server.includes('/notify/') && urls.length) {
+                body.urls = urls.join(',');
+            }
+            const response = await fetch(target, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(body),
+                signal: AbortSignal.timeout(12000),
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok || result.error === true) {
+                throw new Error(
+                    result.error_message || result.message || `Apprise HTTP ${response.status}`
+                );
+            }
+            return 'Apprise terkirim';
+        }
+
         default:
             throw new Error(`Tipe notifikasi ${notification.type} tidak dikenal`);
     }

@@ -18,6 +18,13 @@ const {
     queryJson,
     domainOf,
 } = require('./util');
+const {
+    redisCommand,
+    mqttProbe,
+    dockerInspect,
+    defaultDockerSocket,
+    postgresQuery,
+} = require('./protocols');
 
 const MAX_BODY = 2 * 1024 * 1024;
 const USER_AGENT =
@@ -380,6 +387,96 @@ function statusFor(monitor, ok) {
     return effective ? STATUS.UP : STATUS.DOWN;
 }
 
+/**
+ * Opsi khusus per tipe monitor (Redis, MQTT, Docker, PostgreSQL) disimpan
+ * sebagai satu kolom JSON.
+ */
+function monitorOptions(monitor) {
+    const raw = monitor.options;
+    if (!raw) {
+        return {};
+    }
+    if (typeof raw === 'object') {
+        return raw;
+    }
+    const parsed = parseJson(raw, null);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+}
+
+async function checkRedis(monitor) {
+    const options = monitorOptions(monitor);
+    const host = String(monitor.hostname || '').trim();
+    if (!host) {
+        return { status: STATUS.DOWN, msg: 'Hostname wajib diisi', ping: null };
+    }
+    const result = await redisCommand({
+        host,
+        port: Number(monitor.port || 6379),
+        password: String(options.password || ''),
+        db: options.db === undefined || options.db === '' ? null : Number(options.db),
+        command: String(options.command || 'PING'),
+        expected: String(options.expected || ''),
+        timeout: Math.max(1, Number(monitor.timeout) || 15) * 1000,
+    });
+    return { status: statusFor(monitor, result.ok), msg: result.message, ping: result.ping };
+}
+
+async function checkMqtt(monitor) {
+    const options = monitorOptions(monitor);
+    const host = String(monitor.hostname || '').trim();
+    const topic = String(options.topic || '').trim();
+    if (!host) {
+        return { status: STATUS.DOWN, msg: 'Hostname wajib diisi', ping: null };
+    }
+    if (!topic) {
+        return { status: STATUS.DOWN, msg: 'Topik MQTT wajib diisi', ping: null };
+    }
+    const result = await mqttProbe({
+        host,
+        port: Number(monitor.port || 1883),
+        topic,
+        username: String(options.username || ''),
+        password: String(options.password || ''),
+        clientId: String(options.clientId || ''),
+        expected: String(options.expected || ''),
+        timeout: Math.max(1, Number(monitor.timeout) || 15) * 1000,
+    });
+    return { status: statusFor(monitor, result.ok), msg: result.message, ping: result.ping };
+}
+
+async function checkDocker(monitor) {
+    const options = monitorOptions(monitor);
+    const container = String(options.container || '').trim();
+    if (!container) {
+        return { status: STATUS.DOWN, msg: 'Nama container wajib diisi', ping: null };
+    }
+    const result = await dockerInspect({
+        socket: String(options.socket || defaultDockerSocket()),
+        container,
+        timeout: Math.max(1, Number(monitor.timeout) || 15) * 1000,
+    });
+    return { status: statusFor(monitor, result.ok), msg: result.message, ping: result.ping };
+}
+
+async function checkPostgres(monitor) {
+    const options = monitorOptions(monitor);
+    const host = String(monitor.hostname || '').trim();
+    if (!host) {
+        return { status: STATUS.DOWN, msg: 'Hostname wajib diisi', ping: null };
+    }
+    const user = String(options.user || 'postgres');
+    const result = await postgresQuery({
+        host,
+        port: Number(monitor.port || 5432),
+        user,
+        password: String(options.password || ''),
+        database: String(options.database || user),
+        query: String(options.query || 'SELECT 1'),
+        timeout: Math.max(1, Number(monitor.timeout) || 15) * 1000,
+    });
+    return { status: statusFor(monitor, result.ok), msg: result.message, ping: result.ping };
+}
+
 function stringifyValue(value) {
     if (value === null) {
         return 'null';
@@ -605,6 +702,18 @@ async function runCheck(monitor) {
             break;
         case 'dns':
             result = await checkDns(monitor);
+            break;
+        case 'redis':
+            result = await checkRedis(monitor);
+            break;
+        case 'mqtt':
+            result = await checkMqtt(monitor);
+            break;
+        case 'docker':
+            result = await checkDocker(monitor);
+            break;
+        case 'postgres':
+            result = await checkPostgres(monitor);
             break;
         case 'push':
             return { status: STATUS.UP, msg: 'Menunggu heartbeat push', ping: null, skipped: true };

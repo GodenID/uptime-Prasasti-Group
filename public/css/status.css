@@ -362,6 +362,30 @@ a:hover {
 }
 
 /* ---------- notices & incidents ---------- */
+.announcement {
+    margin: 18px 0 0;
+    padding: 14px 16px;
+    border: 1px solid #d7dde7;
+    border-left: 3px solid var(--primary);
+    border-radius: var(--r-lg);
+    background: var(--paper);
+}
+
+.announcement b {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+.announcement p {
+    margin: 6px 0 0;
+    font-size: 14px;
+    line-height: 1.65;
+    color: var(--ink);
+}
+
 .notice {
     display: flex;
     gap: 12px;
@@ -664,6 +688,16 @@ a:hover {
 
 .foot .spacer {
     flex: 1;
+}
+
+.foot-feed {
+    color: var(--muted);
+    text-decoration: none;
+    border-bottom: 1px dotted var(--line-2);
+}
+
+.foot-feed:hover {
+    color: var(--ink-2);
 }
 
 .foot-credit {

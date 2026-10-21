@@ -112,6 +112,70 @@ function listUsers() {
     return all('SELECT id, username, active, created_at FROM user ORDER BY id');
 }
 
+// ---------- kunci API ----------
+
+const API_KEY_PREFIX = 'pk_';
+const API_KEY_SCOPES = new Set(['read', 'write']);
+
+function hashApiToken(token) {
+    return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
+/**
+ * Token hanya disimpan sebagai hash SHA-256. Nilai aslinya hanya ditampilkan
+ * sekali, saat kunci dibuat.
+ */
+function createApiKey(userId, { name, scope = 'read', expiresInDays = 0 } = {}) {
+    const cleanName = String(name || '').trim().slice(0, 80) || 'Kunci API';
+    const cleanScope = API_KEY_SCOPES.has(scope) ? scope : 'read';
+    const token = `${API_KEY_PREFIX}${randomToken(24)}`;
+    const timestamp = now();
+    const days = Number(expiresInDays) || 0;
+    const expiresAt = days > 0 ? timestamp + days * 86400000 : null;
+    const info = run(
+        'INSERT INTO api_key (name, token_hash, prefix, scope, user_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [cleanName, hashApiToken(token), token.slice(0, 11), cleanScope, userId, timestamp, expiresAt]
+    );
+    return {
+        id: Number(info.lastInsertRowid),
+        name: cleanName,
+        scope: cleanScope,
+        prefix: token.slice(0, 11),
+        token,
+        createdAt: timestamp,
+        expiresAt,
+    };
+}
+
+function findApiKey(token) {
+    if (!token) {
+        return null;
+    }
+    const row = get('SELECT * FROM api_key WHERE token_hash = ?', [hashApiToken(token)]);
+    if (!row) {
+        return null;
+    }
+    if (row.expires_at && Number(row.expires_at) < now()) {
+        return null;
+    }
+    return row;
+}
+
+function touchApiKey(id) {
+    run('UPDATE api_key SET last_used_at = ? WHERE id = ?', [now(), id]);
+}
+
+function listApiKeys(userId) {
+    return all(
+        'SELECT id, name, prefix, scope, created_at, last_used_at, expires_at FROM api_key WHERE user_id = ? ORDER BY id',
+        [userId]
+    );
+}
+
+function revokeApiKey(id, userId) {
+    run('DELETE FROM api_key WHERE id = ? AND user_id = ?', [id, userId]);
+}
+
 // Simple in-memory login throttling: 8 failures per 10 minutes per key.
 const attempts = new Map();
 
@@ -161,6 +225,11 @@ module.exports = {
     countUsers,
     getUserByName,
     listUsers,
+    createApiKey,
+    findApiKey,
+    touchApiKey,
+    listApiKeys,
+    revokeApiKey,
     isThrottled,
     recordFailure,
     clearFailures,

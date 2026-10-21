@@ -4,7 +4,7 @@
 
 <div align="center">
 
-![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522.5-13804d?style=flat&logo=node.js&logoColor=white) ![Dependencies](https://img.shields.io/badge/dependencies-0-success?style=flat&logo=npm&logoColor=white) ![Tests](https://img.shields.io/badge/tests-41%20passing-16a34a?style=flat&logo=githubactions&logoColor=white) ![SQLite](https://img.shields.io/badge/storage-SQLite-003b57?style=flat&logo=sqlite&logoColor=white) ![License](https://img.shields.io/badge/license-MIT-8a7a5c?style=flat) ![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20Windows-007ec6?style=flat) ![Stars](https://img.shields.io/github/stars/GodenID/uptime-Prasasti-Group?style=flat&logo=github&logoColor=white) ![Forks](https://img.shields.io/github/forks/GodenID/uptime-Prasasti-Group?style=flat&logo=github&logoColor=white) ![Issues](https://img.shields.io/github/issues/GodenID/uptime-Prasasti-Group?style=flat&logo=github&logoColor=white)
+![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522.5-13804d?style=flat&logo=node.js&logoColor=white) ![Dependencies](https://img.shields.io/badge/dependencies-0-success?style=flat&logo=npm&logoColor=white) ![Tests](https://img.shields.io/badge/tests-57%20passing-16a34a?style=flat&logo=githubactions&logoColor=white) ![SQLite](https://img.shields.io/badge/storage-SQLite-003b57?style=flat&logo=sqlite&logoColor=white) ![License](https://img.shields.io/badge/license-MIT-8a7a5c?style=flat) ![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20Windows-007ec6?style=flat) ![Stars](https://img.shields.io/github/stars/GodenID/uptime-Prasasti-Group?style=flat&logo=github&logoColor=white) ![Forks](https://img.shields.io/github/forks/GodenID/uptime-Prasasti-Group?style=flat&logo=github&logoColor=white) ![Issues](https://img.shields.io/github/issues/GodenID/uptime-Prasasti-Group?style=flat&logo=github&logoColor=white)
 
 </div>
 
@@ -58,19 +58,20 @@
 | **Basis data** | SQLite mode WAL, satu berkas di `data/prasasti.db`. |
 | **Antarmuka** | Dasbor admin + status page publik, ditulis sebagai modul ES tanpa framework. |
 | **Realtime** | WebSocket di `/ws`, ditulis di atas `node:http` + `node:crypto`. |
-| **Pengujian** | 41 uji integrasi, dijalankan tanpa dependensi pengujian. |
+| **Pengujian** | 57 uji integrasi, dijalankan tanpa dependensi pengujian. |
 
 ## Fitur
 
 | Fitur | Rincian |
 | --- | --- |
-| **Delapan tipe monitor** | HTTP(S), kata kunci, JSON, TCP, ICMP ping, DNS, push, dan grup. |
-| **Denyut & grafik** | Riwayat heartbeat dengan bar 24 jam, grafik waktu respons, uptime 24 jam/7/30/365 hari, log kejadian per monitor. |
-| **Status page publik** | Halaman mandiri di `/status/<slug>` dengan grup monitor, uptime, riwayat insiden, jadwal pemeliharaan, dan pembaruan realtime. |
+| **Dua belas tipe monitor** | HTTP(S), kata kunci, JSON, TCP, ICMP ping, DNS, Redis, MQTT, Docker, PostgreSQL, push, dan grup. |
+| **Denyut & grafik** | Riwayat heartbeat dengan bar 24 jam, grafik waktu respons, uptime 24 jam/7/30/90/365 hari, agregat harian, log kejadian per monitor. |
+| **Status page publik** | Halaman mandiri di `/status/<slug>` dengan grup monitor, uptime, riwayat insiden, jadwal pemeliharaan, pengumuman, umpan RSS, domain kustom, dan pembaruan realtime. |
+| **Bahasa status page** | Indonesia atau Inggris; bahasa dapat mengikuti preferensi peramban. Dasbor admin tetap bahasa Indonesia. |
 | **Insiden otomatis** | Gangguan membuka insiden pada setiap status page yang memuat monitor tersebut, lalu menutupnya saat pulih. Insiden manual bisa ditulis, disematkan, dan diselesaikan. |
 | **Jendela pemeliharaan** | Sekali, harian, atau mingguan. Monitor yang sedang dipelihara tidak memicu notifikasi gangguan. |
-| **Tujuh kanal notifikasi** | Webhook, Discord, Telegram, Slack, ntfy, Gotify, dan SMTP dengan percobaan ulang serta riwayat pengiriman. |
-| **Autentikasi** | Wizard penyiapan akun pertama, sesi cookie HttpOnly, scrypt, pembatasan percobaan login, dan pengelolaan pengguna. |
+| **Sepuluh kanal notifikasi** | Webhook, Discord, Telegram, Slack, ntfy, Gotify, SMTP, Pushover, Home Assistant, dan Apprise, dengan percobaan ulang, filter peristiwa, dan riwayat pengiriman. |
+| **Autentikasi** | Wizard penyiapan akun pertama, sesi cookie HttpOnly, scrypt, pembatasan percobaan login, pengelolaan pengguna, dan kunci API dengan cakupan baca/tulis. |
 | **Impor & ekspor** | Seluruh konfigurasi (monitor, tag, notifikasi, status page) dalam satu berkas JSON. |
 | **Badge SVG** | Status dan uptime monitor untuk ditempel di README atau dasbor lain. |
 | **Sertifikat & domain** | Notifikasi kedaluwarsa sertifikat TLS dan domain. |
@@ -92,7 +93,7 @@ Buka <http://localhost:3001>. Pada basis data kosong, aplikasi menampilkan wizar
 | `npm start` | Menjalankan server HTTP di port `3001`. |
 | `npm run dev` | Menjalankan server dengan restart otomatis (`node --watch`). |
 | `npm run seed` | Mengisi instance dengan monitor, tag, status page, dan pemeliharaan contoh. |
-| `npm test` | Menjalankan 41 uji integrasi pada port dan basis data sementara. |
+| `npm test` | Menjalankan 57 uji integrasi pada port dan basis data sementara. |
 
 > `npm run seed` membuat pengguna `admin` dengan sandi `prasasti2026` bila belum ada pengguna. **Ganti sandi tersebut setelah masuk pertama kali.** Skrip ini idempoten — menjalankannya ulang tidak menggandakan data.
 
@@ -106,8 +107,12 @@ Buka <http://localhost:3001>. Pada basis data kosong, aplikasi menampilkan wizar
 | `tcp` | `hostname`, `port` | Sehat bila koneksi TCP terbentuk dalam batas waktu. |
 | `ping` | `hostname` | ICMP echo; memakai utilitas `ping` sistem. |
 | `dns` | `hostname`, `dnsRecordType`, `dnsResolver`, `expectedValue` | Resolusi A/AAAA/CNAME/MX/TXT/NS; dapat memakai resolver tertentu dan mencocokkan hasil. |
+| `redis` | `hostname`, `port`, `options.password`, `options.db`, `options.command`, `options.expected` | Klien RESP bawaan: AUTH, SELECT, lalu perintah (`PING`, `GET kunci`, `INFO`). Balasan dapat dicocokkan. |
+| `mqtt` | `hostname`, `port`, `options.topic`, `options.username`, `options.password`, `options.clientId`, `options.expected` | Klien MQTT 3.1.1: connect, subscribe satu topik, dan menunggu pesan. Isi pesan dapat dicocokkan. |
+| `docker` | `options.container`, `options.socket` | Docker Engine API di atas socket Unix atau named pipe Windows. Monitor sehat bila container berjalan dan health check tidak `unhealthy`. |
+| `postgres` | `hostname`, `port`, `options.user`, `options.password`, `options.database`, `options.query` | Klien wire protocol v3: autentikasi trust, cleartext, MD5, atau SCRAM-SHA-256, lalu kueri sederhana. |
 | `push` | `pushToken` | Pasif. Kirim denyut dari cron atau skrip: `GET /api/push/<token>?status=up&ping=12`. |
-| `group` | `parentId` anak | Status grup diturunkan dari monitor anak; tidak melakukan pemeriksaan sendiri. |
+| `group` | `parentId` anak | Status grup diturunkan dari monitor anak; grup juga merekam denyut sendiri sehingga uptime grup terhitung. |
 
 Semua monitor mendukung `interval` (detik, minimum 20), `retries`, `retryInterval`, `timeout`, `upsideDown` (gangguan justru dianggap sehat), serta notifikasi kedaluwarsa sertifikat dan domain.
 
@@ -122,17 +127,26 @@ Semua monitor mendukung `interval` (detik, minimum 20), `retries`, `retryInterva
 | `ntfy` | `topic`, opsional `serverUrl`, `token`, `priority`, `clickUrl`. |
 | `gotify` | `serverUrl`, `appToken`, opsional `priority`. |
 | `smtp` | `host`, `port`, `secure`, `user`, `pass`, `from`, `to`, opsional `subjectPrefix`. Mendukung STARTTLS dan AUTH PLAIN/LOGIN. |
+| `pushover` | `token`, `user`, opsional `priority`, `device`, `sound`, `url`. |
+| `homeassistant` | `webhookUrl` (webhook integrasi Home Assistant), opsional `accessToken`. |
+| `apprise` | `serverUrl` (Apprise API), opsional `urls` (daftar target `apprise://`), `token`. |
 
 Setiap notifikasi dapat diuji dari antarmuka atau `POST /api/notifications/:id/test`; hasilnya tercatat di riwayat pengiriman.
+
+Setiap kanal juga dapat dibatasi per peristiwa (`down`, `up`, `certificate`, `domain`) dan diberi interval pengulangan (`resendInterval`, dalam menit) agar gangguan yang masih berjalan dilaporkan ulang secara berkala.
 
 ## Status Page & Badge
 
 | Endpoint | Keterangan |
 | --- | --- |
 | `/status/<slug>` | Halaman status publik. Hanya status page yang diterbitkan; slug tak dikenal atau belum diterbitkan mengembalikan 404. |
-| `GET /api/status-page/<slug>` | Data publik status page dalam JSON. |
-| `GET /api/badge/<id>/status` | Badge SVG berisi status monitor (`up`, `down`, `maintenance`, `pending`). |
-| `GET /api/badge/<id>/uptime/<jam>h` | Badge SVG berisi persentase uptime, misal `/api/badge/1/uptime/24h`. |
+| `/status/<slug>/feed.xml` | Umpan RSS 2.0 berisi insiden aktif, pemeliharaan, dan status tiap layanan. |
+| `/api/status-page/<slug>` | Data publik status page dalam JSON. |
+| `/api/status-page` | Data publik status page yang memakai domain kustom, ditentukan dari header `Host`. |
+| `/api/badge/<id>/status` | Badge SVG berisi status monitor (`up`, `down`, `maintenance`, `pending`). |
+| `/api/badge/<id>/uptime/<jam>h` | Badge SVG berisi persentase uptime, misal `/api/badge/1/uptime/24h`. |
+
+Setiap status page dapat diatur lebih jauh: pengumuman di bagian atas, bahasa halaman (`id`, `en`, atau `auto`), dan domain kustom. Bila domain kustom diarahkan ke server, seluruh path publik pada domain tersebut menyajikan halaman status page itu, termasuk umpan RSS di `/feed.xml`.
 
 ## Realtime
 
@@ -151,14 +165,15 @@ Sesi admin yang login lewat browser menerima `beat`, `refresh`, `settings`, dan 
 
 ```
 server/
-  index.js      HTTP server, berkas statis, perutean WebSocket
-  api.js        REST API, validasi, impor/ekspor
-  engine.js     penjadwalan, denyut, uptime, insiden, pemeliharaan
+  index.js      HTTP server, berkas statis, perutean WebSocket, domain kustom
+  api.js        REST API, validasi, impor/ekspor, kunci API
+  engine.js     penjadwadian, denyut, uptime, insiden, pemeliharaan, grup
   checks.js     pemeriksaan HTTP, kata kunci, JSON, TCP, ping, DNS
+  protocols.js  klien Redis (RESP), MQTT 3.1.1, Docker Engine API, PostgreSQL
   notifier.js   pengiriman notifikasi dan klien SMTP
-  statuspage.js payload status page publik
-  db.js         skema SQLite dan pengaturan bawaan
-  auth.js       scrypt, sesi, pembatasan login
+  statuspage.js payload status page publik dan umpan RSS
+  db.js         skema SQLite, migrasi ringan, dan pengaturan bawaan
+  auth.js       scrypt, sesi, pembatasan login, kunci API
   models.js     bentuk data API
   ws.js         implementasi WebSocket
   util.js       helper lintas modul
@@ -169,9 +184,9 @@ public/
   404.html      halaman tidak ditemukan
   favicon.svg   lambang prasasti
   css/          sistem desain putih dan tinta biru
-  js/           router, tampilan, grafik, klien API
+  js/           router, tampilan, grafik, klien API, kamus bahasa
 test/
-  run.mjs       suite integrasi (41 uji)
+  run.mjs       suite integrasi (57 uji)
 ```
 
 **Prinsip desain**
@@ -197,7 +212,7 @@ Pengaturan lain (judul instance, zona waktu, tema, `retentionDays`, `certificate
 
 ## REST API
 
-Semua endpoint admin memerlukan sesi cookie. Permintaan tanpa sesi dijawab `401`.
+Semua endpoint admin memerlukan sesi cookie atau kunci API. Permintaan tanpa keduanya dijawab `401`.
 
 <details>
 <summary><strong>Daftar endpoint lengkap</strong></summary>
@@ -226,16 +241,33 @@ Semua endpoint admin memerlukan sesi cookie. Permintaan tanpa sesi dijawab `401`
 | `GET`/`PATCH` | `/api/settings` | Pengaturan instance. |
 | `POST` | `/api/password` | Ganti kata sandi. |
 | `POST` | `/api/users` | Tambah pengguna. |
+| `GET`/`POST`/`DELETE` | `/api/api-keys` | Kunci API: daftar, buat, dan cabut. |
 | `GET`/`POST` | `/api/export`, `/api/import` | Ekspor dan impor konfigurasi. |
 | `GET` | `/api/status-page/:slug` | Data publik status page. |
+| `GET` | `/api/status-page` | Data status page pada domain kustom. |
 | `GET` | `/api/badge/:id/...` | Badge SVG. |
 
 </details>
+
+## Kunci API
+
+Kunci API memberi akses programatis ke endpoint admin tanpa sesi peramban:
+
+```bash
+curl -H "Authorization: Bearer pk_..." http://127.0.0.1:3001/api/monitors
+```
+
+- Token hanya ditampilkan sekali, saat kunci dibuat. Server menyimpan hash SHA-256 token itu saja.
+- Cakupan `read` hanya menerima permintaan `GET`; cakupan `write` juga boleh mengubah data.
+- Kunci API tidak dapat membuat atau mencabut kunci lain.
+- Kunci dapat diberi masa berlaku (hari) dan dicabut kapan saja dari menu **Pengaturan**.
 
 ## Penyimpanan & Retensi
 
 - Basis data SQLite berada di `./data/prasasti.db` dengan mode WAL.
 - Denyut lama dipangkas otomatis setiap jam mengikuti `retentionDays` (bawaan 180 hari). Denyut penting — perubahan status — dipertahankan lebih lama.
+- Tabel `heartbeat_daily` menyimpan agregat per hari (jumlah denyut per status, jumlah waktu respons, durasi gangguan). Uptime rentang panjang memakai tabel ini, sedangkan bagian hari berjalan dihitung langsung dari denyut.
+- Migrasi skema dijalankan otomatis saat server mulai: kolom dan tabel baru ditambahkan bila belum ada, dan agregat harian diisi ulang dari denyut lama.
 - Cadangkan dengan menyalin direktori `data/` saat server berhenti, atau memakai `sqlite3 .backup`.
 
 ## Keamanan
@@ -244,6 +276,7 @@ Semua endpoint admin memerlukan sesi cookie. Permintaan tanpa sesi dijawab `401`
 - Cookie sesi `HttpOnly`, `SameSite=Lax`, dan `Secure` saat diakses lewat HTTPS.
 - Login dibatasi 8 kegagalan per 10 menit per alamat IP dan nama pengguna.
 - Penggantian kata sandi mengakhiri sesi lain milik pengguna tersebut.
+- Kunci API disimpan sebagai hash SHA-256, memiliki cakupan baca/tulis, dan dapat kedaluwarsa.
 - Header CSP ketat: skrip hanya dari origin sendiri, tanpa `eval`, tanpa sumber daya pihak ketiga.
 - Semua masukan API divalidasi dan dibatasi ukurannya; nama berkas statis dinormalisasi untuk mencegah path traversal.
 - Permintaan mutasi divalidasi terhadap same-origin.
@@ -256,10 +289,10 @@ Saat mengekspos instance ke internet, jalankan di belakang reverse proxy dengan 
 npm test
 ```
 
-Suite integrasi menjalankan instance terpisah pada port uji dengan basis data sementara, lalu memeriksa penyiapan akun, seluruh tipe monitor, pemeriksaan manual, push, tag, status page, insiden, pemeliharaan, webhook dan SMTP (server tiruan lokal), pengaturan, pengguna, ekspor/impor, badge, WebSocket, dan penyajian berkas statis. Tidak ada dependensi pengujian.
+Suite integrasi menjalankan instance terpisah pada port uji dengan basis data sementara, lalu memeriksa penyiapan akun, seluruh tipe monitor (termasuk Redis, MQTT, dan PostgreSQL lewat server tiruan lokal), pemeriksaan manual, push, tag, grup, status page beserta umpan RSS dan domain kustom, insiden, pemeliharaan, seluruh kanal notifikasi, filter peristiwa dan notifikasi ulang, kunci API, agregat uptime harian, pengaturan, pengguna, ekspor/impor, badge, WebSocket, dan penyajian berkas statis. Tidak ada dependensi pengujian.
 
 ```
-Total: 41 uji · lulus 41 · gagal 0
+Total: 57 uji · lulus 57 · gagal 0
 ```
 
 ## Deployment

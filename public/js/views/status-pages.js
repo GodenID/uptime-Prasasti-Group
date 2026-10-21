@@ -113,7 +113,9 @@ function rowHtml(page, monitors) {
             </div>
             <div class="meta">/status/${escapeHtml(page.slug)} · ${monitorCount} monitor · ${
         page.groups.length
-    } grup · dibuat ${fmtDate(page.createdAt, false)}</div>
+    } grup · dibuat ${fmtDate(page.createdAt, false)}${
+        page.domain ? ` · domain ${escapeHtml(page.domain)}` : ''
+    }</div>
         </div>
         <div class="actions">
             ${
@@ -122,6 +124,13 @@ function rowHtml(page, monitors) {
                           'external',
                           13
                       )} Buka</a>`
+                    : ''
+            }
+            ${
+                page.published
+                    ? `<a class="btn sm ghost" href="/status/${encodeURIComponent(
+                          page.slug
+                      )}/feed.xml" target="_blank" rel="noopener">${icon('rss', 13)} RSS</a>`
                     : ''
             }
             <button class="btn sm ghost" data-copy="${page.id}">${icon('copy', 13)} Salin tautan</button>
@@ -198,6 +207,30 @@ export function openStatusPageForm(page, ctx) {
                         `<input class="input" name="footerText" maxlength="300" value="${escapeHtml(
                             page?.footerText || ''
                         )}" placeholder="Dikelola oleh tim infrastruktur" />`
+                    )}
+                    ${field(
+                        'Domain kustom (opsional)',
+                        `<input class="input" name="domain" maxlength="120" value="${escapeHtml(
+                            page?.domain || ''
+                        )}" placeholder="status.contoh.id" />`,
+                        'Arahkan domain ini ke server memakai proxy. Halaman publik memakai domain tersebut.'
+                    )}
+                    ${field(
+                        'Bahasa halaman',
+                        `<select class="select" name="lang">
+                            <option value="id" ${(page?.lang || 'id') === 'id' ? 'selected' : ''}>Indonesia</option>
+                            <option value="en" ${page?.lang === 'en' ? 'selected' : ''}>English</option>
+                            <option value="auto" ${page?.lang === 'auto' ? 'selected' : ''}>Ikuti peramban</option>
+                        </select>`,
+                        'Hanya status page publik yang diterjemahkan; dasbor tetap bahasa Indonesia.'
+                    )}
+                    ${field(
+                        'Pengumuman (opsional)',
+                        `<textarea class="textarea" name="announcement" maxlength="2000" placeholder="Informasi singkat untuk pengunjung">${escapeHtml(
+                            page?.announcement || ''
+                        )}</textarea>`,
+                        'Ditampilkan di bagian atas halaman publik.',
+                        true
                     )}
                 </div>
 
@@ -297,6 +330,9 @@ export function openStatusPageForm(page, ctx) {
             description: form.description.value,
             icon: form.icon.value.trim(),
             footerText: form.footerText.value,
+            domain: form.domain.value.trim(),
+            lang: form.lang.value,
+            announcement: form.announcement.value.trim(),
             published: form.published.classList.contains('on'),
             showTags: form.showTags.classList.contains('on'),
             showPoweredBy: form.showPoweredBy.classList.contains('on'),

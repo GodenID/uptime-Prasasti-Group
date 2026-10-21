@@ -34,6 +34,31 @@ CREATE TABLE IF NOT EXISTS session (
     ip TEXT
 );
 
+CREATE TABLE IF NOT EXISTS heartbeat_daily (
+    monitor_id INTEGER NOT NULL REFERENCES monitor(id) ON DELETE CASCADE,
+    day INTEGER NOT NULL,
+    up_count INTEGER NOT NULL DEFAULT 0,
+    down_count INTEGER NOT NULL DEFAULT 0,
+    pending_count INTEGER NOT NULL DEFAULT 0,
+    maintenance_count INTEGER NOT NULL DEFAULT 0,
+    ping_sum REAL NOT NULL DEFAULT 0,
+    ping_count INTEGER NOT NULL DEFAULT 0,
+    downtime_ms INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (monitor_id, day)
+);
+
+CREATE TABLE IF NOT EXISTS api_key (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    prefix TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'read',
+    user_id INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER,
+    expires_at INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS setting (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -201,6 +226,7 @@ CREATE INDEX IF NOT EXISTS idx_heartbeat_monitor_time ON heartbeat(monitor_id, t
 CREATE INDEX IF NOT EXISTS idx_heartbeat_time ON heartbeat(time);
 CREATE INDEX IF NOT EXISTS idx_heartbeat_important ON heartbeat(monitor_id, important, time DESC);
 CREATE INDEX IF NOT EXISTS idx_session_expiry ON session(expires_at);
+CREATE INDEX IF NOT EXISTS idx_api_key_user ON api_key(user_id);
 CREATE INDEX IF NOT EXISTS idx_incident_started ON incident(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_monitor_parent ON monitor(parent_id);
 `);
@@ -267,6 +293,26 @@ function transaction(fn) {
         throw error;
     }
 }
+
+/**
+ * Migrasi ringan: tambahkan kolom bila belum ada, supaya basis data lama
+ * tetap bisa dipakai tanpa langkah manual.
+ */
+function addColumn(table, column, definition) {
+    const columns = all(`PRAGMA table_info(${table})`);
+    if (columns.some((row) => row.name === column)) {
+        return false;
+    }
+    exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    return true;
+}
+
+addColumn('monitor', 'options', "TEXT NOT NULL DEFAULT '{}'");
+addColumn('notification', 'events', "TEXT NOT NULL DEFAULT ''");
+addColumn('notification', 'resend_interval', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('status_page', 'domain', "TEXT NOT NULL DEFAULT ''");
+addColumn('status_page', 'announcement', "TEXT NOT NULL DEFAULT ''");
+addColumn('status_page', 'lang', "TEXT NOT NULL DEFAULT 'id'");
 
 function getSetting(key, fallback = null) {
     const row = get('SELECT value FROM setting WHERE `key` = ?', [key]);

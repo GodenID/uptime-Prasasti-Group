@@ -17,6 +17,7 @@ export const state = {
     maintenances: [],
     incidents: [],
     stats: {},
+    apiKeys: [],
     version: '',
     search: '',
     connected: false,
@@ -406,6 +407,7 @@ async function loadBootstrap() {
     state.maintenances = data.maintenances;
     state.incidents = data.incidents;
     state.stats = data.stats;
+    state.apiKeys = data.apiKeys || [];
     state.version = data.version;
     document.title = `${data.settings.title || 'Uptime Prasasti'} · Prasasti`;
 }

@@ -21,6 +21,9 @@ const PORT = Number(process.env.TEST_PORT || 3999);
 const TARGET_PORT = PORT + 1;
 const HOOK_PORT = PORT + 2;
 const SMTP_PORT = PORT + 3;
+const REDIS_PORT = PORT + 4;
+const MQTT_PORT = PORT + 5;
+const PG_PORT = PORT + 6;
 const BASE = `http://127.0.0.1:${PORT}`;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -219,6 +222,174 @@ const smtpServer = net.createServer((socket) => {
     socket.on('error', () => {});
 });
 
+// ---------- permintaan dengan Host kustom ----------
+function requestWithHost(hostname, pathname) {
+    return new Promise((resolve, reject) => {
+        const request = http.request(
+            { host: '127.0.0.1', port: PORT, path: pathname, method: 'GET', headers: { Host: hostname } },
+            (response) => {
+                let body = '';
+                response.on('data', (chunk) => {
+                    body += chunk;
+                });
+                response.on('end', () => {
+                    resolve({ status: response.statusCode, headers: response.headers, body });
+                });
+            }
+        );
+        request.on('error', reject);
+        request.end();
+    });
+}
+
+// ---------- server tiruan protokol ----------
+const redisServer = net.createServer((socket) => {
+    let buffer = '';
+    socket.on('data', (chunk) => {
+        buffer += chunk.toString('utf8');
+        for (;;) {
+            const header = /^\*(\d+)\r\n/.exec(buffer);
+            if (!header) return;
+            const count = Number(header[1]);
+            let offset = header[0].length;
+            const args = [];
+            let incomplete = false;
+            for (let index = 0; index < count; index += 1) {
+                const lengthMatch = /^\$(\d+)\r\n/.exec(buffer.slice(offset));
+                if (!lengthMatch) {
+                    incomplete = true;
+                    break;
+                }
+                const length = Number(lengthMatch[1]);
+                const start = offset + lengthMatch[0].length;
+                if (buffer.length < start + length + 2) {
+                    incomplete = true;
+                    break;
+                }
+                args.push(buffer.slice(start, start + length));
+                offset = start + length + 2;
+            }
+            if (incomplete) return;
+            buffer = buffer.slice(offset);
+            const command = String(args[0] || '').toUpperCase();
+            if (command === 'PING') {
+                socket.write('+PONG\r\n');
+            } else if (command === 'AUTH' || command === 'SELECT') {
+                socket.write('+OK\r\n');
+            } else if (command === 'GET') {
+                const value = Buffer.from('nilai-sehat', 'utf8');
+                socket.write(Buffer.concat([Buffer.from(`$${value.length}\r\n`, 'utf8'), value, Buffer.from('\r\n')]));
+            } else {
+                socket.write('-ERR unknown command\r\n');
+            }
+        }
+    });
+    socket.on('error', () => {});
+});
+
+const mqttServer = net.createServer((socket) => {
+    let buffer = Buffer.alloc(0);
+    socket.on('data', (chunk) => {
+        buffer = Buffer.concat([buffer, chunk]);
+        for (;;) {
+            if (buffer.length < 2) return;
+            let multiplier = 1;
+            let length = 0;
+            let index = 1;
+            for (;;) {
+                if (index >= buffer.length) return;
+                const digit = buffer[index];
+                length += (digit & 0x7f) * multiplier;
+                index += 1;
+                if ((digit & 0x80) === 0) break;
+                multiplier *= 128;
+            }
+            if (buffer.length < index + length) return;
+            const type = (buffer[0] >> 4) & 0x0f;
+            const payload = buffer.slice(index, index + length);
+            buffer = buffer.slice(index + length);
+            if (type === 1) {
+                socket.write(Buffer.from([0x20, 0x02, 0x00, 0x00]));
+            } else if (type === 8) {
+                const topicLength = payload.readUInt16BE(2);
+                const topic = payload.slice(4, 4 + topicLength).toString('utf8');
+                socket.write(Buffer.from([0x90, 0x03, payload[0], payload[1], 0x00]));
+                const topicBuffer = Buffer.from(topic, 'utf8');
+                const body = Buffer.concat([
+                    Buffer.from([topicBuffer.length >> 8, topicBuffer.length & 0xff]),
+                    topicBuffer,
+                    Buffer.from('22.5 C', 'utf8'),
+                ]);
+                socket.write(Buffer.concat([Buffer.from([0x30, body.length]), body]));
+            }
+        }
+    });
+    socket.on('error', () => {});
+});
+
+function pgMessage(type, payload) {
+    const length = Buffer.alloc(4);
+    length.writeInt32BE(payload.length + 4, 0);
+    return Buffer.concat([Buffer.from(type, 'utf8'), length, payload]);
+}
+
+const pgServer = net.createServer((socket) => {
+    let buffer = Buffer.alloc(0);
+    socket.on('data', (chunk) => {
+        buffer = Buffer.concat([buffer, chunk]);
+        for (;;) {
+            if (buffer.length < 5) return;
+            if (buffer[0] === 0x00) {
+                // Pesan StartupMessage tidak punya byte tipe.
+                const length = buffer.readInt32BE(0);
+                if (buffer.length < length) return;
+                buffer = buffer.slice(length);
+                const authOk = Buffer.alloc(4);
+                authOk.writeInt32BE(0, 0);
+                socket.write(pgMessage('R', authOk));
+                socket.write(pgMessage('Z', Buffer.from('I', 'utf8')));
+                continue;
+            }
+            const length = buffer.readInt32BE(1);
+            if (buffer.length < 1 + length) return;
+            const type = String.fromCharCode(buffer[0]);
+            const payload = buffer.slice(5, 1 + length);
+            buffer = buffer.slice(1 + length);
+            if (type === 'Q') {
+                const fieldCount = Buffer.alloc(2);
+                fieldCount.writeInt16BE(1, 0);
+                const field = Buffer.concat([
+                    Buffer.from('ping\0', 'utf8'),
+                    Buffer.alloc(4),
+                    Buffer.alloc(2),
+                    (() => {
+                        const typeOid = Buffer.alloc(4);
+                        typeOid.writeInt32BE(23, 0);
+                        return typeOid;
+                    })(),
+                    Buffer.alloc(2),
+                    (() => {
+                        const modifier = Buffer.alloc(4);
+                        modifier.writeInt32BE(-1, 0);
+                        return modifier;
+                    })(),
+                    Buffer.alloc(2),
+                ]);
+                socket.write(pgMessage('T', Buffer.concat([fieldCount, field])));
+                const value = Buffer.from('1', 'utf8');
+                const rowCount = Buffer.alloc(2);
+                rowCount.writeInt16BE(1, 0);
+                const valueLength = Buffer.alloc(4);
+                valueLength.writeInt32BE(value.length, 0);
+                socket.write(pgMessage('D', Buffer.concat([rowCount, valueLength, value])));
+                socket.write(pgMessage('C', Buffer.from('SELECT 1\0', 'utf8')));
+                socket.write(pgMessage('Z', Buffer.from('I', 'utf8')));
+            }
+        }
+    });
+    socket.on('error', () => {});
+});
+
 // ---------- orkestrasi ----------
 const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prasasti-test-'));
 let serverLog = '';
@@ -228,6 +399,9 @@ try {
     await listen(targetServer, TARGET_PORT);
     await listen(hookServer, HOOK_PORT);
     await listen(smtpServer, SMTP_PORT);
+    await listen(redisServer, REDIS_PORT);
+    await listen(mqttServer, MQTT_PORT);
+    await listen(pgServer, PG_PORT);
 
     server = spawn(process.execPath, [path.join(ROOT, 'server', 'index.js')], {
         cwd: ROOT,
@@ -401,6 +575,84 @@ try {
         assert.equal(response.data.beat.status, 1);
     });
 
+    await test('pemeriksaan Redis menjalankan perintah dan membandingkan balasan', async () => {
+        const monitor = await createMonitor('redis', {
+            name: 'Redis Uji',
+            type: 'redis',
+            hostname: '127.0.0.1',
+            port: REDIS_PORT,
+            interval: 3600,
+            timeout: 5,
+            options: { command: 'PING', expected: 'PONG' },
+        });
+        assert.equal(monitor.options.command, 'PING');
+        const response = await admin.fetch(`/api/monitors/${monitor.id}/check`, { method: 'POST' });
+        assert.equal(response.data.beat.status, 1);
+        assert.match(response.data.beat.msg, /Redis/);
+
+        const mismatched = await createMonitor('redisMismatch', {
+            name: 'Redis Salah',
+            type: 'redis',
+            hostname: '127.0.0.1',
+            port: REDIS_PORT,
+            interval: 3600,
+            timeout: 5,
+            options: { command: 'GET kunci', expected: 'lain' },
+        });
+        const failed = await admin.fetch(`/api/monitors/${mismatched.id}/check`, { method: 'POST' });
+        assert.equal(failed.data.beat.status, 0);
+    });
+
+    await test('pemeriksaan MQTT menerima pesan pada topik', async () => {
+        const monitor = await createMonitor('mqtt', {
+            name: 'MQTT Uji',
+            type: 'mqtt',
+            hostname: '127.0.0.1',
+            port: MQTT_PORT,
+            interval: 3600,
+            timeout: 5,
+            options: { topic: 'sensor/temperatur', expected: '22.5' },
+        });
+        assert.equal(monitor.options.topic, 'sensor/temperatur');
+        const response = await admin.fetch(`/api/monitors/${monitor.id}/check`, { method: 'POST' });
+        assert.equal(response.data.beat.status, 1);
+        assert.match(response.data.beat.msg, /MQTT/);
+    });
+
+    await test('pemeriksaan PostgreSQL menjalankan kueri', async () => {
+        const monitor = await createMonitor('postgres', {
+            name: 'PostgreSQL Uji',
+            type: 'postgres',
+            hostname: '127.0.0.1',
+            port: PG_PORT,
+            interval: 3600,
+            timeout: 5,
+            options: { user: 'prasasti', database: 'prasasti', query: 'SELECT 1' },
+        });
+        const response = await admin.fetch(`/api/monitors/${monitor.id}/check`, { method: 'POST' });
+        assert.equal(response.data.beat.status, 1);
+        assert.match(response.data.beat.msg, /PostgreSQL/);
+    });
+
+    await test('monitor Docker menuntut nama container dan melapor gagal tanpa daemon', async () => {
+        const invalid = await admin.fetch('/api/monitors', {
+            method: 'POST',
+            body: { name: 'Docker Kosong', type: 'docker', interval: 3600 },
+        });
+        assert.equal(invalid.status, 400);
+
+        const monitor = await createMonitor('docker', {
+            name: 'Docker Uji',
+            type: 'docker',
+            interval: 3600,
+            timeout: 5,
+            options: { container: 'prasasti-api', socket: '/tmp/tidak-ada-docker.sock' },
+        });
+        const response = await admin.fetch(`/api/monitors/${monitor.id}/check`, { method: 'POST' });
+        assert.equal(response.data.beat.status, 0);
+        assert.match(response.data.beat.msg, /Docker/);
+    });
+
     await test('kode respons yang diterima dapat dikustomisasi', async () => {
         const monitor = await createMonitor('accepted', {
             name: 'Kode 500 Diterima',
@@ -497,6 +749,28 @@ try {
         assert.equal(group.status, 1);
     });
 
+    await test('monitor grup punya riwayat denyut dan uptime sendiri', async () => {
+        await admin.fetch(`/api/monitors/${monitors.http.id}/check`, { method: 'POST' });
+        const detail = await admin.fetch(`/api/monitors/${monitors.group.id}`);
+        assert.equal(detail.status, 200);
+        assert.ok(detail.data.monitor.beats.length >= 1, 'grup harus punya denyut');
+        assert.ok(detail.data.uptime['24h'].uptime !== null, 'uptime grup harus terhitung');
+        assert.equal(detail.data.uptime['24h'].total, detail.data.uptime['24h'].up + detail.data.uptime['24h'].down);
+        assert.equal(detail.data.monitor.status, 1);
+    });
+
+    await test('agregat uptime harian konsisten dengan riwayat denyut', async () => {
+        const detail = await admin.fetch(`/api/monitors/${monitors.http.id}`);
+        const events = await admin.fetch(`/api/monitors/${monitors.http.id}/events?limit=200`);
+        const counted = events.data.events.filter((beat) => beat.status === 0 || beat.status === 1).length;
+        const week = detail.data.uptime['7d'];
+        assert.equal(week.total, week.up + week.down);
+        assert.equal(week.total, counted, 'total 7 hari harus sama dengan jumlah denyut');
+        assert.ok(detail.data.uptime['90d']);
+        assert.ok(detail.data.uptime['365d']);
+        assert.ok(detail.data.uptime['24h'].downtime >= 0);
+    });
+
     await test('tag dapat dibuat, diubah, dipasang, dan dihapus', async () => {
         const created = await admin.fetch('/api/tags', { method: 'POST', body: { name: 'uji-tag', color: '#46c392' } });
         assert.equal(created.status, 201);
@@ -568,6 +842,67 @@ try {
         const hidden = await fetch(`${BASE}/api/status-page/${slug}`);
         assert.equal(hidden.status, 404);
         await admin.fetch(`/api/status-pages/${pageId}/publish`, { method: 'POST', body: { published: true } });
+    });
+
+    await test('umpan RSS status page tersedia', async () => {
+        const feed = await fetch(`${BASE}/status/${slug}/feed.xml`);
+        assert.equal(feed.status, 200);
+        assert.match(feed.headers.get('content-type'), /rss\+xml/);
+        const xml = await feed.text();
+        assert.match(xml, /<rss version="2\.0">/);
+        assert.match(xml, /<channel>/);
+        assert.match(xml, /Status Uji Prasasti/);
+        assert.match(xml, /<item>/);
+    });
+
+    await test('pengumuman dan bahasa status page tersimpan', async () => {
+        const patched = await admin.fetch(`/api/status-pages/${pageId}`, {
+            method: 'PATCH',
+            body: { announcement: 'Pemeliharaan terjadwal malam ini.', lang: 'en' },
+        });
+        assert.equal(patched.status, 200);
+        assert.equal(patched.data.statusPage.announcement, 'Pemeliharaan terjadwal malam ini.');
+        assert.equal(patched.data.statusPage.lang, 'en');
+
+        const payload = await (await fetch(`${BASE}/api/status-page/${slug}`)).json();
+        assert.equal(payload.page.announcement, 'Pemeliharaan terjadwal malam ini.');
+        assert.equal(payload.page.lang, 'en');
+
+        await admin.fetch(`/api/status-pages/${pageId}`, {
+            method: 'PATCH',
+            body: { announcement: '', lang: 'id' },
+        });
+    });
+
+    await test('domain kustom melayani status page dan menolak domain tak valid', async () => {
+        const invalid = await admin.fetch(`/api/status-pages/${pageId}`, {
+            method: 'PATCH',
+            body: { domain: 'bukan domain' },
+        });
+        assert.equal(invalid.status, 400);
+
+        const patched = await admin.fetch(`/api/status-pages/${pageId}`, {
+            method: 'PATCH',
+            body: { domain: 'status.uji.local' },
+        });
+        assert.equal(patched.status, 200);
+        assert.equal(patched.data.statusPage.domain, 'status.uji.local');
+
+        const page = await requestWithHost('status.uji.local', '/');
+        assert.equal(page.status, 200);
+        assert.match(page.headers['content-type'], /text\/html/);
+        assert.match(page.body, /id="status-root"/);
+
+        const json = await requestWithHost('status.uji.local', '/api/status-page/');
+        assert.equal(json.status, 200);
+        const payload = JSON.parse(json.body);
+        assert.equal(payload.page.slug, slug);
+
+        const feed = await requestWithHost('status.uji.local', '/feed.xml');
+        assert.equal(feed.status, 200);
+        assert.match(feed.body, /<rss/);
+
+        await admin.fetch(`/api/status-pages/${pageId}`, { method: 'PATCH', body: { domain: '' } });
     });
 
     let incidentId = null;
@@ -684,6 +1019,133 @@ try {
         await admin.fetch(`/api/notifications/${created.data.notification.id}`, { method: 'DELETE' });
     });
 
+    await test('kanal Home Assistant dan Apprise mengirim muatan uji', async () => {
+        const before = hookHits.length;
+
+        const homeAssistant = await admin.fetch('/api/notifications', {
+            method: 'POST',
+            body: {
+                name: 'Home Assistant Uji',
+                type: 'homeassistant',
+                config: { webhookUrl: `http://127.0.0.1:${HOOK_PORT}/ha` },
+            },
+        });
+        assert.equal(homeAssistant.status, 201);
+        const haSent = await admin.fetch(`/api/notifications/${homeAssistant.data.notification.id}/test`, {
+            method: 'POST',
+        });
+        assert.equal(haSent.status, 200);
+        assert.equal(hookHits.length, before + 1);
+        assert.equal(hookHits[before].url, '/ha');
+        const haPayload = JSON.parse(hookHits[before].body);
+        assert.match(haPayload.title, /Uji coba notifikasi/);
+        assert.equal(haPayload.status, 'up');
+
+        const apprise = await admin.fetch('/api/notifications', {
+            method: 'POST',
+            body: {
+                name: 'Apprise Uji',
+                type: 'apprise',
+                config: {
+                    serverUrl: `http://127.0.0.1:${HOOK_PORT}`,
+                    urls: 'mailto://contoh@uji.local',
+                },
+            },
+        });
+        assert.equal(apprise.status, 201);
+        const appriseSent = await admin.fetch(`/api/notifications/${apprise.data.notification.id}/test`, {
+            method: 'POST',
+        });
+        assert.equal(appriseSent.status, 200);
+        assert.equal(hookHits.length, before + 2);
+        assert.equal(hookHits[before + 1].url, '/notify');
+        const apprisePayload = JSON.parse(hookHits[before + 1].body);
+        assert.equal(apprisePayload.urls, 'mailto://contoh@uji.local');
+        assert.equal(apprisePayload.type, 'success');
+    });
+
+    await test('kanal Pushover menolak konfigurasi belum lengkap', async () => {
+        const created = await admin.fetch('/api/notifications', {
+            method: 'POST',
+            body: { name: 'Pushover Kosong', type: 'pushover', config: {} },
+        });
+        assert.equal(created.status, 201);
+        const failed = await admin.fetch(`/api/notifications/${created.data.notification.id}/test`, {
+            method: 'POST',
+        });
+        assert.equal(failed.status, 500);
+        assert.match(String(failed.data.error), /Pushover/);
+        await admin.fetch(`/api/notifications/${created.data.notification.id}`, { method: 'DELETE' });
+    });
+
+    await test('filter peristiwa dan notifikasi ulang bekerja', async () => {
+        const downChannel = await admin.fetch('/api/notifications', {
+            method: 'POST',
+            body: {
+                name: 'Kanal Gangguan',
+                type: 'webhook',
+                config: { url: `http://127.0.0.1:${HOOK_PORT}/down` },
+                events: ['down'],
+                resendInterval: 0.05,
+            },
+        });
+        assert.equal(downChannel.status, 201);
+        assert.deepEqual(downChannel.data.notification.events, ['down']);
+        assert.equal(downChannel.data.notification.resendInterval, 0.05);
+
+        const upChannel = await admin.fetch('/api/notifications', {
+            method: 'POST',
+            body: {
+                name: 'Kanal Pemulihan',
+                type: 'webhook',
+                config: { url: `http://127.0.0.1:${HOOK_PORT}/up` },
+                events: ['up'],
+            },
+        });
+
+        const monitor = await createMonitor('events', {
+            name: 'Monitor Peristiwa',
+            type: 'http',
+            url: `http://127.0.0.1:${TARGET_PORT}/fail`,
+            interval: 3600,
+        });
+        await admin.fetch(`/api/monitors/${monitor.id}`, {
+            method: 'PATCH',
+            body: { notificationIds: [downChannel.data.notification.id, upChannel.data.notification.id] },
+        });
+
+        const before = hookHits.length;
+        const first = await admin.fetch(`/api/monitors/${monitor.id}/check`, { method: 'POST' });
+        assert.equal(first.data.beat.status, 0);
+        await waitFor('notifikasi gangguan terkirim', () => hookHits.length >= before + 1);
+        assert.equal(hookHits.length, before + 1, 'hanya kanal gangguan yang menerima peristiwa down');
+        assert.equal(hookHits[before].url, '/down');
+
+        // Denyut kedua tanpa perubahan status tidak mengirim ulang sebelum interval habis.
+        const immediate = await admin.fetch(`/api/monitors/${monitor.id}/check`, { method: 'POST' });
+        assert.equal(immediate.data.beat.status, 0);
+        await sleep(500);
+        assert.equal(hookHits.length, before + 1, 'tidak ada kiriman ulang sebelum interval');
+
+        // Setelah interval 3 detik, notifikasi gangguan dikirim ulang.
+        await sleep(3500);
+        await admin.fetch(`/api/monitors/${monitor.id}/check`, { method: 'POST' });
+        await waitFor('notifikasi gangguan diulang', () => hookHits.length >= before + 2);
+        assert.equal(hookHits.length, before + 2, 'notifikasi gangguan diulang setelah interval');
+        assert.equal(hookHits[before + 1].url, '/down');
+
+        // Pemulihan hanya dikirim ke kanal peristiwa 'up'.
+        await admin.fetch(`/api/monitors/${monitor.id}`, {
+            method: 'PATCH',
+            body: { url: `http://127.0.0.1:${TARGET_PORT}/ok` },
+        });
+        const recovered = await admin.fetch(`/api/monitors/${monitor.id}/check`, { method: 'POST' });
+        assert.equal(recovered.data.beat.status, 1);
+        await waitFor('notifikasi pemulihan terkirim', () => hookHits.length >= before + 3);
+        assert.equal(hookHits.length, before + 3);
+        assert.equal(hookHits[before + 2].url, '/up');
+    });
+
     await test('SMTP mengirim email uji ke server lokal', async () => {
         const created = await admin.fetch('/api/notifications', {
             method: 'POST',
@@ -778,7 +1240,8 @@ try {
     await test('ekspor memuat seluruh konfigurasi', async () => {
         const exported = await admin.fetch('/api/export');
         assert.equal(exported.status, 200);
-        assert.equal(exported.data.monitors.length, 9);
+        const list = await admin.fetch('/api/monitors');
+        assert.equal(exported.data.monitors.length, list.data.monitors.length);
         assert.equal(exported.data.statusPages.length, 1);
         assert.ok(exported.data.settings);
         assert.ok(Array.isArray(exported.data.notifications));
@@ -815,6 +1278,89 @@ try {
         assert.match(await status.text(), /<svg/);
         const uptime = await fetch(`${BASE}/api/badge/${monitors.http.id}/uptime/24h`);
         assert.equal(uptime.status, 200);
+    });
+
+    // ================= kunci api =================
+    section('Kunci API');
+
+    let readToken = '';
+    let writeToken = '';
+
+    await test('kunci API dapat dibuat dan memakai header Bearer', async () => {
+        const created = await admin.fetch('/api/api-keys', {
+            method: 'POST',
+            body: { name: 'Pembaca', scope: 'read' },
+        });
+        assert.equal(created.status, 201);
+        assert.match(created.data.token, /^pk_[0-9a-f]{48}$/);
+        assert.equal(created.data.key.scope, 'read');
+        readToken = created.data.token;
+
+        const list = await admin.fetch('/api/api-keys');
+        assert.equal(list.status, 200);
+        assert.ok(list.data.keys.some((key) => key.name === 'Pembaca'));
+        assert.ok(!JSON.stringify(list.data.keys).includes(readToken), 'token mentah tidak boleh tersimpan');
+
+        const response = await fetch(`${BASE}/api/monitors`, {
+            headers: { Authorization: `Bearer ${readToken}` },
+        });
+        assert.equal(response.status, 200);
+        const payload = await response.json();
+        assert.ok(Array.isArray(payload.monitors));
+    });
+
+    await test('kunci baca ditolak saat menulis, kunci tulis diterima', async () => {
+        const denied = await fetch(`${BASE}/api/monitors`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${readToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: 'Ditolak', type: 'http', url: 'https://contoh.id' }),
+        });
+        assert.equal(denied.status, 403);
+
+        const created = await admin.fetch('/api/api-keys', {
+            method: 'POST',
+            body: { name: 'Penulis', scope: 'write' },
+        });
+        assert.equal(created.status, 201);
+        writeToken = created.data.token;
+
+        const allowed = await fetch(`${BASE}/api/monitors`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${writeToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                name: 'Monitor lewat kunci',
+                type: 'http',
+                url: 'https://contoh.id',
+                interval: 3600,
+            }),
+        });
+        assert.equal(allowed.status, 201);
+    });
+
+    await test('token salah ditolak dan kunci bisa dicabut', async () => {
+        const bogus = await fetch(`${BASE}/api/monitors`, {
+            headers: { Authorization: 'Bearer pk_tidakada' },
+        });
+        assert.equal(bogus.status, 401);
+
+        const keys = await admin.fetch('/api/api-keys');
+        const target = keys.data.keys.find((key) => key.name === 'Pembaca');
+        const revoked = await admin.fetch(`/api/api-keys/${target.id}`, { method: 'DELETE' });
+        assert.equal(revoked.status, 200);
+
+        const after = await fetch(`${BASE}/api/monitors`, {
+            headers: { Authorization: `Bearer ${readToken}` },
+        });
+        assert.equal(after.status, 401);
+    });
+
+    await test('kunci API tidak dapat membuat kunci lain', async () => {
+        const response = await fetch(`${BASE}/api/api-keys`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${writeToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: 'Ekskalasi' }),
+        });
+        assert.equal(response.status, 403);
     });
 
     // ================= realtime =================
@@ -896,6 +1442,9 @@ try {
     await new Promise((resolve) => targetServer.close(resolve));
     await new Promise((resolve) => hookServer.close(resolve));
     await new Promise((resolve) => smtpServer.close(resolve));
+    await new Promise((resolve) => redisServer.close(resolve));
+    await new Promise((resolve) => mqttServer.close(resolve));
+    await new Promise((resolve) => pgServer.close(resolve));
     await fs.rm(dataDir, { recursive: true, force: true }).catch(() => {});
 }
 

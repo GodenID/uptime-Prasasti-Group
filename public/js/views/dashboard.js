@@ -24,11 +24,17 @@ const TYPES = [
     { id: 'tcp', label: 'Port TCP', desc: 'Konektivitas port' },
     { id: 'ping', label: 'Ping', desc: 'ICMP echo ke host' },
     { id: 'dns', label: 'DNS', desc: 'Record A, MX, TXT, dll' },
+    { id: 'redis', label: 'Redis', desc: 'Perintah pada server Redis' },
+    { id: 'mqtt', label: 'MQTT', desc: 'Pesan pada topik MQTT' },
+    { id: 'docker', label: 'Docker', desc: 'Status container Docker' },
+    { id: 'postgres', label: 'PostgreSQL', desc: 'Kueri ke database PostgreSQL' },
     { id: 'push', label: 'Push', desc: 'Heartbeat dari aplikasi Anda' },
     { id: 'group', label: 'Grup', desc: 'Kelompokkan monitor' },
 ];
 
 const DNS_TYPES = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'PTR', 'SOA', 'CAA', 'SRV', 'NAPTR'];
+
+const PORT_PLACEHOLDER = { redis: '6379', mqtt: '1883', postgres: '5432' };
 
 export async function render(root, ctx) {
     draw(root, ctx);
@@ -409,6 +415,7 @@ export function openMonitorForm(monitor, ctx) {
         return current === null || current === undefined ? fallback : current;
     };
     const selectedType = monitor?.type || 'http';
+    const monitorOptions = monitor?.options || {};
 
     const modal = openModal({
         title: editing ? 'Ubah monitor' : 'Monitor baru',
@@ -508,6 +515,104 @@ export function openMonitorForm(monitor, ctx) {
                         <input class="input" name="dnsResolver" value="${escapeHtml(
                             value('dnsResolver')
                         )}" placeholder="1.1.1.1" />
+                    </div>
+
+                    <div class="field" data-only="redis" id="row-redis-password">
+                        <label>Kata sandi Redis</label>
+                        <input class="input" name="redisPassword" type="password" value="${escapeHtml(
+                            monitorOptions.password || ''
+                        )}" />
+                    </div>
+                    <div class="field" data-only="redis" id="row-redis-db">
+                        <label>Database (nomor)</label>
+                        <input class="input" name="redisDb" type="number" min="0" max="1024" value="${escapeHtml(
+                            monitorOptions.db ?? 0
+                        )}" />
+                    </div>
+                    <div class="field" data-only="redis" id="row-redis-command">
+                        <label>Perintah</label>
+                        <input class="input" name="redisCommand" value="${escapeHtml(
+                            monitorOptions.command || 'PING'
+                        )}" />
+                        <span class="hint">Contoh: PING, GET kunci, INFO.</span>
+                    </div>
+                    <div class="field" data-only="redis" id="row-redis-expected">
+                        <label>Balasan yang diharapkan</label>
+                        <input class="input" name="redisExpected" value="${escapeHtml(
+                            monitorOptions.expected || ''
+                        )}" />
+                        <span class="hint">Kosongkan untuk menganggap balasan apa pun sehat.</span>
+                    </div>
+
+                    <div class="field" data-only="mqtt" id="row-mqtt-topic">
+                        <label>Topik</label>
+                        <input class="input" name="mqttTopic" value="${escapeHtml(
+                            monitorOptions.topic || ''
+                        )}" placeholder="sensor/temperatur" />
+                    </div>
+                    <div class="field" data-only="mqtt" id="row-mqtt-user">
+                        <label>Username (opsional)</label>
+                        <input class="input" name="mqttUser" value="${escapeHtml(
+                            monitorOptions.username || ''
+                        )}" />
+                    </div>
+                    <div class="field" data-only="mqtt" id="row-mqtt-password">
+                        <label>Kata sandi (opsional)</label>
+                        <input class="input" name="mqttPassword" type="password" value="${escapeHtml(
+                            monitorOptions.password || ''
+                        )}" />
+                    </div>
+                    <div class="field" data-only="mqtt" id="row-mqtt-client">
+                        <label>Client ID</label>
+                        <input class="input" name="mqttClientId" value="${escapeHtml(
+                            monitorOptions.clientId || ''
+                        )}" placeholder="prasasti-1" />
+                    </div>
+                    <div class="field" data-only="mqtt" id="row-mqtt-expected">
+                        <label>Isi pesan yang diharapkan</label>
+                        <input class="input" name="mqttExpected" value="${escapeHtml(
+                            monitorOptions.expected || ''
+                        )}" />
+                        <span class="hint">Kosongkan untuk menganggap pesan apa pun sehat.</span>
+                    </div>
+
+                    <div class="field" data-only="docker" id="row-docker-container">
+                        <label>Nama atau ID container</label>
+                        <input class="input" name="dockerContainer" value="${escapeHtml(
+                            monitorOptions.container || ''
+                        )}" placeholder="prasasti-api" />
+                    </div>
+                    <div class="field" data-only="docker" id="row-docker-socket">
+                        <label>Socket Docker (opsional)</label>
+                        <input class="input" name="dockerSocket" value="${escapeHtml(
+                            monitorOptions.socket || ''
+                        )}" placeholder="/var/run/docker.sock" />
+                        <span class="hint">Kosongkan untuk memakai socket bawaan sistem.</span>
+                    </div>
+
+                    <div class="field" data-only="postgres" id="row-pg-user">
+                        <label>Pengguna</label>
+                        <input class="input" name="pgUser" value="${escapeHtml(
+                            monitorOptions.user || 'postgres'
+                        )}" />
+                    </div>
+                    <div class="field" data-only="postgres" id="row-pg-password">
+                        <label>Kata sandi</label>
+                        <input class="input" name="pgPassword" type="password" value="${escapeHtml(
+                            monitorOptions.password || ''
+                        )}" />
+                    </div>
+                    <div class="field" data-only="postgres" id="row-pg-database">
+                        <label>Database</label>
+                        <input class="input" name="pgDatabase" value="${escapeHtml(
+                            monitorOptions.database || ''
+                        )}" placeholder="postgres" />
+                    </div>
+                    <div class="field" data-only="postgres" id="row-pg-query">
+                        <label>Kueri</label>
+                        <input class="input" name="pgQuery" value="${escapeHtml(
+                            monitorOptions.query || 'SELECT 1'
+                        )}" />
                     </div>
 
                     ${field(
@@ -675,8 +780,12 @@ export function openMonitorForm(monitor, ctx) {
         form.querySelector('#row-expected').classList.toggle('hidden', !['json', 'dns'].includes(type));
         form.querySelector('#row-dnstype').classList.toggle('hidden', type !== 'dns');
         form.querySelector('#row-dnsresolver').classList.toggle('hidden', type !== 'dns');
-        form.querySelector('#row-host').classList.toggle('hidden', !['tcp', 'ping', 'dns'].includes(type));
-        form.querySelector('#row-port').classList.toggle('hidden', type !== 'tcp');
+        form.querySelector('#row-host').classList.toggle('hidden', !['tcp', 'ping', 'dns', 'redis', 'mqtt', 'postgres'].includes(type));
+        form.querySelector('#row-port').classList.toggle('hidden', !['tcp', 'redis', 'mqtt', 'postgres'].includes(type));
+        form.querySelector('#row-port input').placeholder = PORT_PLACEHOLDER[type] || '';
+        form.querySelectorAll('[data-only]').forEach((row) => {
+            row.classList.toggle('hidden', row.dataset.only !== type);
+        });
     };
     applyType(selectedType);
 
@@ -709,8 +818,39 @@ export function openMonitorForm(monitor, ctx) {
         button.disabled = true;
         button.textContent = 'Menyimpan…';
 
+        const selectedType = typeInput.value;
+        let options = {};
+        if (selectedType === 'redis') {
+            options = {
+                password: form.redisPassword.value,
+                db: Number(form.redisDb.value || 0),
+                command: form.redisCommand.value.trim(),
+                expected: form.redisExpected.value.trim(),
+            };
+        } else if (selectedType === 'mqtt') {
+            options = {
+                topic: form.mqttTopic.value.trim(),
+                username: form.mqttUser.value.trim(),
+                password: form.mqttPassword.value,
+                clientId: form.mqttClientId.value.trim(),
+                expected: form.mqttExpected.value.trim(),
+            };
+        } else if (selectedType === 'docker') {
+            options = {
+                container: form.dockerContainer.value.trim(),
+                socket: form.dockerSocket.value.trim(),
+            };
+        } else if (selectedType === 'postgres') {
+            options = {
+                user: form.pgUser.value.trim(),
+                password: form.pgPassword.value,
+                database: form.pgDatabase.value.trim(),
+                query: form.pgQuery.value.trim(),
+            };
+        }
+
         const data = {
-            type: typeInput.value,
+            type: selectedType,
             name: form.name.value.trim(),
             url: form.url.value.trim(),
             hostname: form.hostname.value.trim(),
@@ -724,6 +864,7 @@ export function openMonitorForm(monitor, ctx) {
             expectedValue: form.expectedValue.value,
             dnsRecordType: form.dnsRecordType.value,
             dnsResolver: form.dnsResolver.value.trim(),
+            options,
             parentId: form.parentId.value ? Number(form.parentId.value) : null,
             interval: Number(form.interval.value),
             retries: Number(form.retries.value),

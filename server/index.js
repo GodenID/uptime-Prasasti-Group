@@ -10,7 +10,7 @@ const { handleApi } = require('./api');
 const { createWebSocketServer } = require('./ws');
 const { parseCookies, getSessionUser } = require('./auth');
 const engine = require('./engine');
-const { statusPagePayload, getPageBySlug, pageMonitorsFlat } = require('./statuspage');
+const { statusPagePayload, getPageBySlug, getPageByDomain, statusPageFeed, pageMonitorsFlat } = require('./statuspage');
 const { now } = require('./util');
 
 const PORT = Number(process.env.PORT || 3001);
@@ -131,6 +131,19 @@ function safeJoin(root, target) {
     return resolved.startsWith(path.resolve(root)) ? resolved : null;
 }
 
+function serveFeed(req, res, page) {
+    const forwarded = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+    const protocol = forwarded || (req.socket.encrypted ? 'https' : 'http');
+    const host = req.headers.host || 'localhost';
+    const xml = statusPageFeed(page, `${protocol}://${host}`);
+    res.writeHead(200, {
+        'Content-Type': 'application/rss+xml; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'Content-Length': Buffer.byteLength(xml),
+    });
+    res.end(xml);
+}
+
 const server = http.createServer(async (req, res) => {
     securityHeaders(res);
     let url;
@@ -160,14 +173,38 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname.startsWith('/status/')) {
-        const slug = decodeURIComponent(url.pathname.slice('/status/'.length)).replace(/\/+$/, '');
-        const page = getPageBySlug(slug);
+        const rest = decodeURIComponent(url.pathname.slice('/status/'.length)).replace(/\/+$/, '');
+        const feedMatch = /^(.*)\/(feed\.xml|feed|rss\.xml)$/.exec(rest);
+        if (feedMatch) {
+            const page = getPageBySlug(feedMatch[1]);
+            if (!page || !page.published) {
+                serveFile(req, res, path.join(PUBLIC_DIR, '404.html'), { status: 404 });
+                return;
+            }
+            serveFeed(req, res, page);
+            return;
+        }
+        const page = getPageBySlug(rest);
         if (!page || !page.published) {
             serveFile(req, res, path.join(PUBLIC_DIR, '404.html'), { status: 404 });
             return;
         }
         serveFile(req, res, path.join(PUBLIC_DIR, 'status.html'));
         return;
+    }
+
+    // Status page dengan domain kustom: seluruh path publik memakai halaman itu.
+    const host = String(req.headers.host || '').split(':')[0].toLowerCase();
+    const domainPage = host ? getPageByDomain(host) : null;
+    if (domainPage && domainPage.published) {
+        if (url.pathname === '/feed.xml' || url.pathname === '/rss') {
+            serveFeed(req, res, domainPage);
+            return;
+        }
+        if (url.pathname === '/' || url.pathname.startsWith('/status/')) {
+            serveFile(req, res, path.join(PUBLIC_DIR, 'status.html'));
+            return;
+        }
     }
 
     if (url.pathname === '/favicon.ico') {

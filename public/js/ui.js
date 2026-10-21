@@ -57,6 +57,7 @@ const ICONS = {
     sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.4 1.4M17.6 17.6 19 19M19 5l-1.4 1.4M6.4 17.6 5 19"/>',
     arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
     activity: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
+    rss: '<path d="M5 19a1 1 0 1 0 0-2 1 1 0 0 0 0 2"/><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 5a15 15 0 0 1 15 15"/>',
 };
 
 export function icon(name, size = 17, extra = '') {
@@ -290,6 +291,10 @@ export function typeLabel(type) {
             dns: 'DNS',
             push: 'Push',
             group: 'Grup',
+            redis: 'Redis',
+            mqtt: 'MQTT',
+            docker: 'Docker',
+            postgres: 'PostgreSQL',
         }[type] || type
     );
 }
@@ -305,6 +310,10 @@ export function typeGlyph(type) {
             dns: 'DNS',
             push: 'PUSH',
             group: 'GRP',
+            redis: 'REDIS',
+            mqtt: 'MQTT',
+            docker: 'DOCKER',
+            postgres: 'PG',
         }[type] || '?'
     );
 }
@@ -316,5 +325,7 @@ export function targetOf(monitor) {
     if (monitor.type === 'tcp') return `${monitor.hostname}:${monitor.port}`;
     if (monitor.type === 'push') return 'Heartbeat push';
     if (monitor.type === 'group') return `${monitor.childrenCount || 0} monitor`;
+    if (monitor.type === 'docker') return monitor.options?.container || '—';
+    if (monitor.type === 'mqtt') return monitor.options?.topic || monitor.hostname || '—';
     return monitor.hostname || '—';
 }
