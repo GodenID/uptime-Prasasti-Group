@@ -13,6 +13,10 @@
   setiap denyut disimpan, setiap gangguan tercatat, dan setiap status page punya jejak yang bisa dibaca publik.
 </p>
 
+<p align="center">
+  <strong>Live:</strong> <a href="https://uptime.prasastigroup.id">uptime.prasastigroup.id</a> — Cloudflare Workers + D1 + Durable Objects.
+</p>
+
 ---
 
 ## Daftar Isi
@@ -52,19 +56,20 @@
 
 | Aspek | Keterangan |
 | --- | --- |
-| **Runtime** | Node.js ≥ 22.5 (`node:sqlite`), diuji pada Node.js 24. |
-| **Dependensi** | Nol. Hanya modul bawaan Node.js dan WebSocket yang ditulis sendiri. |
-| **Build step** | Tidak ada bundler, tidak ada `npm install`, tidak ada kompilasi. |
-| **Basis data** | SQLite mode WAL, satu berkas di `data/prasasti.db`. |
+| **Runtime** | Dua target: Cloudflare Workers (utama, `worker/`) dan Node.js ≥ 22.5 (`server/`). |
+| **Dependensi** | Node: nol dependensi. Workers: hanya alat bantu pengembangan (`wrangler`, `vitest`). |
+| **Build step** | Tidak ada bundler. Workers memakai `wrangler deploy`; Node langsung `node server/index.js`. |
+| **Basis data** | D1 di Cloudflare; SQLite mode WAL di `data/prasasti.db` untuk versi Node. |
 | **Antarmuka** | Dasbor admin + status page publik, ditulis sebagai modul ES tanpa framework. |
-| **Realtime** | WebSocket di `/ws`, ditulis di atas `node:http` + `node:crypto`. |
-| **Pengujian** | 57 uji integrasi, dijalankan tanpa dependensi pengujian. |
+| **Realtime** | WebSocket di `/ws`: Durable Object hub di Workers, `node:http` + `node:crypto` di Node. |
+| **Penjadwalan** | Satu Durable Object per monitor dengan alarm; cron tiap menit sebagai jaring pengaman. |
+| **Pengujian** | 57 uji integrasi Node + 18 uji integrasi Workers di workerd. |
 
 ## Fitur
 
 | Fitur | Rincian |
 | --- | --- |
-| **Dua belas tipe monitor** | HTTP(S), kata kunci, JSON, TCP, ICMP ping, DNS, Redis, MQTT, Docker, PostgreSQL, push, dan grup. |
+| **Dua belas tipe monitor** | HTTP(S), kata kunci, JSON, TCP, ICMP ping, DNS, Redis, MQTT, Docker, PostgreSQL, push, dan grup. Di Workers, ping dan Docker dilaporkan *pending* karena tidak didukung runtime. |
 | **Denyut & grafik** | Riwayat heartbeat dengan bar 24 jam, grafik waktu respons, uptime 24 jam/7/30/90/365 hari, agregat harian, log kejadian per monitor. |
 | **Status page publik** | Halaman mandiri di `/status/<slug>` dengan grup monitor, uptime, riwayat insiden, jadwal pemeliharaan, pengumuman, umpan RSS, domain kustom, dan pembaruan realtime. |
 | **Bahasa status page** | Indonesia atau Inggris; bahasa dapat mengikuti preferensi peramban. Dasbor admin tetap bahasa Indonesia. |
@@ -74,9 +79,36 @@
 | **Autentikasi** | Wizard penyiapan akun pertama, sesi cookie HttpOnly, scrypt, pembatasan percobaan login, pengelolaan pengguna, dan kunci API dengan cakupan baca/tulis. |
 | **Impor & ekspor** | Seluruh konfigurasi (monitor, tag, notifikasi, status page) dalam satu berkas JSON. |
 | **Badge SVG** | Status dan uptime monitor untuk ditempel di README atau dasbor lain. |
-| **Sertifikat & domain** | Notifikasi kedaluwarsa sertifikat TLS dan domain. |
+| **Sertifikat & domain** | Notifikasi kedaluwarsa domain lewat RDAP di kedua target; kedaluwarsa sertifikat TLS hanya di versi Node. |
 
 ## Mulai Cepat
+
+### Cloudflare Workers (utama)
+
+Instance produksi: <https://uptime.prasastigroup.id>.
+
+```bash
+cd worker
+npm install
+npx wrangler login
+npx wrangler d1 create prasasti      # salin database_id ke wrangler.jsonc
+npx wrangler d1 migrations apply prasasti --remote
+npx wrangler deploy
+```
+
+Pasang domain sendiri di `wrangler.jsonc`:
+
+```jsonc
+"routes": [
+  { "pattern": "uptime.contoh.id", "custom_domain": true }
+]
+```
+
+Buka domain tersebut. Pada basis data kosong, aplikasi menampilkan wizard penyiapan akun admin pertama. Rincian, batas runtime, dan operasi ada di [`worker/README.md`](worker/README.md).
+
+> `*.workers.dev` diblokir DNS beberapa ISP Indonesia. Pakai domain kustom seperti contoh di atas.
+
+### Node.js lokal
 
 **Kebutuhan:** Node.js 22.5 atau lebih baru. Tidak ada `npm install`.
 
@@ -187,12 +219,32 @@ public/
   js/           router, tampilan, grafik, klien API, kamus bahasa
 test/
   run.mjs       suite integrasi (57 uji)
+
+worker/
+  wrangler.jsonc  konfigurasi Worker, D1, Durable Object, cron, domain
+  migrations/     skema D1
+  src/
+    index.js      routing Worker, aset statis, cron
+    api.js        REST API, validasi, impor/ekspor, kunci API
+    engine.js     denyut, uptime, insiden, pemeliharaan, grup, retry
+    checks.js     HTTP, kata kunci, JSON, DNS-over-HTTPS, TCP/Redis/MQTT/Postgres
+    protocols.js  klien protokol di atas Sockets API
+    notifier.js   kanal notifikasi dan SMTP
+    statuspage.js payload status page publik dan umpan RSS
+    db.js         pembungkus D1 dan pengaturan bawaan
+    auth.js       scrypt, sesi, pembatasan login, kunci API
+    do/
+      monitor.js  Durable Object per monitor (alarm, retry, jadwal)
+      hub.js      Durable Object realtime (WebSocket hibernasi)
+  test/
+    worker.test.mjs  suite integrasi workerd (18 uji)
 ```
 
 **Prinsip desain**
 
-- **Standar pustaka saja.** `node:http`, `node:sqlite`, `node:crypto`, `node:tls`, `node:net`, `node:dns`, `node:zlib` — tidak ada dependensi pihak ketiga, di server maupun di peramban.
-- **Satu proses.** Server HTTP, penjadwalan pemeriksaan, dan WebSocket berbagi satu proses dan satu berkas SQLite.
+- **Standar pustaka saja.** Di Node memakai `node:http`, `node:sqlite`, `node:crypto`, `node:tls`, `node:net`, `node:dns`, `node:zlib`; di Workers memakai API runtime Cloudflare. Tidak ada framework di server maupun peramban.
+- **Satu sumber kebenaran.** Kedua target memakai `public/` yang sama; hanya lapisan penyimpanan dan penjadwalan yang berbeda.
+- **Satu monitor, satu Durable Object.** Alarm tiap monitor berdiri sendiri, sehingga pemeriksaan tidak berebut jadwal dan tetap hidup saat isolate di-evict.
 - **Sistem desain tunggal.** Kertas putih, tinta biru, tipografi serif untuk heading — dasbor dan status page memakai bahasa visual yang sama.
 
 ## Konfigurasi Lingkungan
@@ -295,6 +347,17 @@ Suite integrasi menjalankan instance terpisah pada port uji dengan basis data se
 Total: 57 uji · lulus 57 · gagal 0
 ```
 
+Versi Workers diuji di workerd dengan D1 dan Durable Object sungguhan:
+
+```bash
+cd worker
+npm test
+```
+
+```
+Total: 18 uji · lulus 18 · gagal 0
+```
+
 ## Deployment
 
 Jalankan di belakang reverse proxy dengan HTTPS, dan batasi `HOST` ke antarmuka loopback bila akses dari luar tidak diperlukan:
@@ -325,13 +388,37 @@ HOST=127.0.0.1 PORT=3001 PRASTASI_DATA_DIR=/var/lib/prasasti node server/index.j
 
 Lindungi direktori data (`chmod 700`) dan jalankan proses sebagai pengguna non-root. Untuk instance dengan lalu lintas besar, letakkan basis data pada volume terpisah dan jalankan beberapa instance di belakang load balancer.
 
+## Deployment Cloudflare (Workers + D1)
+
+Instance utama repo ini berjalan di **<https://uptime.prasastigroup.id>** dengan Cloudflare Workers, D1, dan Durable Objects. Kode ada di `worker/`, sedangkan antarmuka di `public/` dipakai bersama dengan versi Node.
+
+```bash
+cd worker
+npm install
+npx wrangler login
+npx wrangler d1 create prasasti          # salin database_id ke wrangler.jsonc
+npx wrangler d1 migrations apply prasasti --remote
+npx wrangler deploy
+```
+
+Untuk domain sendiri, tambahkan `routes` dengan `custom_domain: true` seperti pada Mulai Cepat. Ini juga jalan keluar bila `*.workers.dev` diblokir ISP.
+
+Batasan runtime Workers:
+
+- ICMP ping dan monitor Docker tidak tersedia; keduanya dicatat sebagai *pending*, bukan gangguan.
+- Pemeriksaan TCP/Redis/MQTT/PostgreSQL, SMTP, dan Sockets API membutuhkan Workers Paid.
+- DNS memakai DNS-over-HTTPS; sertifikat TLS tidak bisa dibaca, jadi notifikasi kedaluwarsa sertifikat hanya ada di versi Node.
+- Setiap denyut menulis beberapa baris D1. Free plan (100.000 baris tulis/hari) cukup untuk belasan monitor; sisanya perlu Workers Paid.
+
+Rincian lengkap ada di [`worker/README.md`](worker/README.md).
+
 ## Kontribusi
 
 Laporkan bug atau ajukan fitur melalui [Issues](https://github.com/GodenID/uptime-Prasasti-Group/issues).
 
 1. Fork repository dan buat branch temu: `git checkout -b feature/nama-perubahan`.
-2. Ubah kode dengan gaya yang mengikuti berkas sekitar — CommonJS di `server/`, modul ES di `public/js/`.
-3. Jalankan `npm test`; seluruh uji harus lulus.
+2. Ubah kode dengan gaya yang mengikuti berkas sekitar — CommonJS di `server/`, modul ES di `public/js/` dan `worker/src/`.
+3. Jalankan `npm test` (versi Node) dan `npm test` di `worker/` (versi Workers); seluruh uji harus lulus.
 4. Buka pull request dengan ringkasan perubahan dan alasan.
 
 ## Lisensi

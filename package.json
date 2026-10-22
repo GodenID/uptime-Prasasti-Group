@@ -12,6 +12,10 @@
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
     "seed": "node server/seed.js",
-    "test": "node test/run.mjs"
+    "test": "node test/run.mjs",
+    "worker:dev": "npm --prefix worker run dev",
+    "worker:test": "npm --prefix worker test",
+    "worker:deploy": "npm --prefix worker run deploy",
+    "worker:migrate": "npm --prefix worker run d1:migrate:remote"
   }
 }

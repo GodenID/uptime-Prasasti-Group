@@ -1,0 +1,38 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "uptime-prasasti",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-04",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "../public",
+    "binding": "ASSETS",
+    "html_handling": "none"
+  },
+  "routes": [
+    { "pattern": "uptime.prasastigroup.id", "custom_domain": true }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "prasasti",
+      "database_id": "a41722b7-7d45-4e2f-90c1-c4b76218c7dd",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "MONITOR", "class_name": "Monitor" },
+      { "name": "HUB", "class_name": "Hub" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Monitor", "Hub"] }
+  ],
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+  "observability": {
+    "enabled": true
+  }
+}

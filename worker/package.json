@@ -1,0 +1,21 @@
+{
+  "name": "uptime-prasasti-worker",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "d1:create": "wrangler d1 create prasasti",
+    "d1:migrate:local": "wrangler d1 migrations apply prasasti --local",
+    "d1:migrate:remote": "wrangler d1 migrations apply prasasti --remote",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.4.6",
+    "@cloudflare/vitest-pool-workers": "^0.23.0",
+    "@msw/cloudflare": "^0.2.0",
+    "vitest": "^4.1.12",
+    "wrangler": "^4.151.3"
+  }
+}

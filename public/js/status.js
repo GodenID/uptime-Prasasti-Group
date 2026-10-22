@@ -5,6 +5,9 @@ const slug = decodeURIComponent(
     location.pathname.replace(/^\/status\//, '').replace(/\/+$/, '')
 );
 
+// Pada domain kustom slug diambil dari payload status page.
+let activeSlug = slug;
+
 const root = document.getElementById('status-root');
 
 const view = {
@@ -57,6 +60,9 @@ async function load() {
             throw new Error(t('cannotLoad'));
         }
         view.payload = await response.json();
+        if (!activeSlug && view.payload?.page?.slug) {
+            activeSlug = view.payload.page.slug;
+        }
         view.error = '';
         view.lastReceived = Date.now();
         render();
@@ -136,7 +142,7 @@ function render() {
                 ? t('subPending')
                 : t('subDefault', { total: totalMonitors });
 
-    const feedUrl = slug ? `/status/${slug}/feed.xml` : '/feed.xml';
+    const feedUrl = activeSlug ? `/status/${activeSlug}/feed.xml` : '/feed.xml';
 
     root.innerHTML = `
         <header class="hero">
@@ -397,7 +403,7 @@ function connect() {
     socket.addEventListener('open', () => {
         view.connected = true;
         view.retry = 900;
-        socket.send(JSON.stringify({ type: 'subscribe', slug }));
+        socket.send(JSON.stringify({ type: 'subscribe', slug: activeSlug }));
         clearInterval(view.ping);
         view.ping = setInterval(() => {
             if (socket.readyState === WebSocket.OPEN) {
@@ -414,7 +420,7 @@ function connect() {
         } catch {
             return;
         }
-        if (message.type === 'status:snapshot' && message.payload && message.slug === slug) {
+        if (message.type === 'status:snapshot' && message.payload && message.slug === activeSlug) {
             view.payload = message.payload;
             view.lastReceived = Date.now();
             render();
